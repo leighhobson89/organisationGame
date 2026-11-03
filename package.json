@@ -1,0 +1,26 @@
+{
+  "name": "the-palimpsest-laboratory",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "node --test --test-isolation=none",
+    "test:game": "node --test --test-isolation=none tests/unit/game-foundation/game-systems.test.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:performance": "playwright test --config=playwright.performance.config.js",
+    "test:perf": "npm run build && playwright test --config=playwright.benchmark.config.js",
+    "profile:perf": "npm run build -- --sourcemap --configLoader native && playwright test --config=playwright.profiling.config.js"
+  },
+  "dependencies": {
+    "lz-string": "1.5.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "vite": "^8.3.5"
+  }
+}

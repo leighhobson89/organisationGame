@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#211b16" />
+    <meta
+      name="description"
+      content="Restore order to Professor Morrow's impossible laboratory."
+    />
+    <title>The Palimpsest Laboratory</title>
+    <style>
+      #app-load-error[hidden] {
+        display: none;
+      }
+
+      #app-load-error:not([hidden]) {
+        box-sizing: border-box;
+        max-width: 44rem;
+        margin: clamp(1rem, 10vh, 6rem) auto;
+        padding: clamp(1rem, 4vw, 1.75rem);
+        border: 1px solid #ad8b4b;
+        border-radius: 12px;
+        color: #f5ead5;
+        background: #261f18;
+        font: 1rem/1.55 system-ui, sans-serif;
+      }
+
+      #app-load-error h1 {
+        margin: 0 0 0.75rem;
+        font-size: clamp(1.25rem, 4vw, 1.8rem);
+      }
+
+      #app-load-error p {
+        margin: 0.55rem 0;
+      }
+
+      #app-load-error code {
+        padding: 0.1rem 0.35rem;
+        border-radius: 4px;
+        color: #fff0cd;
+        background: #120e0a;
+        font: 0.95em ui-monospace, monospace;
+      }
+
+      @media (max-width: 720px) {
+        #app-load-error:not([hidden]) {
+          margin: 1rem;
+        }
+      }
+    </style>
+    <script>
+      let appModuleLoadFailed = false;
+
+      window.addEventListener('error', (event) => {
+        const failedScript = event.target;
+        if (!(failedScript instanceof HTMLScriptElement)
+          || failedScript.type !== 'module'
+          || !failedScript.src) return;
+
+        appModuleLoadFailed = true;
+        const appLoadError = document.getElementById('app-load-error');
+        if (appLoadError) appLoadError.hidden = false;
+      }, true);
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <main id="app-load-error" role="alert" aria-labelledby="app-load-error-title" hidden>
+      <h1 id="app-load-error-title">The laboratory could not load</h1>
+      <p>The game's JavaScript entry could not be loaded.</p>
+      <p>If you are running the source project, open a terminal in the project folder and run <code>npm run dev</code>. Then open the URL printed by Vite, normally <code>http://127.0.0.1:5173/</code>.</p>
+    </main>
+    <script>
+      if (appModuleLoadFailed) {
+        const appLoadError = document.getElementById('app-load-error');
+        if (appLoadError) appLoadError.hidden = false;
+      }
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
