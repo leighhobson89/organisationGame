@@ -1,6 +1,6 @@
 # Architecture and Technical Status
 
-**Status:** The Vite and React JavaScript foundation, two playable research chapters, and derived full-restoration ending are implemented. The hybrid Canvas overview meets the one-host full-world interaction gate at up to 5,024 entities. Optional synthesized audio is wired and automated-verified; human listening quality and the independent playthrough remain open, and larger authored content stays gated. The Chaos Event's original trigger and Elian's response remain unresolved.
+**Status:** The Vite and React JavaScript foundation, two playable research chapters, and derived full-restoration ending are implemented. The hybrid Canvas overview meets the one-host full-world interaction gate at up to 5,024 entities; the dense 5,024-item starting view now also switches to Canvas and measured 16.8/16.7/16.8ms wheel p95 across three trials. Optional synthesized audio is wired and automated-verified; human listening quality and the independent playthrough remain open, and larger authored content stays gated. The Chaos Event's original trigger and Elian's response remain unresolved.
 
 ## Technology and source boundaries
 
@@ -12,16 +12,93 @@ The app runs entirely in the browser with Vite, React, plain JavaScript ES modul
 - `src/game/world/` contains camera transforms, the uniform-grid spatial index, and shared placement-slot allocation.
 - `src/game/persistence/` normalizes state, migrates saves, manages three local manual slots, compresses exports, imports saves, and handles autosave recovery.
 - `src/app/`, `src/ui/`, and `src/styles/` contain the React shell, accessible controls and panels, and visual system.
+- `src/app/useGamePersistence.js` owns initial save load/recovery, normalized game/autosave state, the autosave worker and coordinator, snapshots, imports, and starting a fresh game. It invalidates the coordinator synchronously on each game-state update and disposes worker/coordinator resources at teardown. `App.jsx` retains transient selection, skill/puzzle, preferences/audio, and panel state.
+
+Import handling validates the incoming payload before making changes, backs up the current save before applying the new state, and notifies `App` before the state update so completion-audio suppression is set before a complete save is applied. Invalid imports preserve the current save and state. The hook keeps existing recovery/corrupt-save handling, autosave enable semantics, schema, and persisted fields.
 
 ## World, content, and interaction
 
+Camera-only view updates skip unchanged detail cards: `LabObject` is memoized, selection callbacks and highlight-source props keep stable identities, and actual item, selection, highlight, or drag changes still update the affected card. Compass highlight IDs also remain stable across camera-only `App` renders. In overview mode, this keeps the Canvas redraw effect from clearing and repainting unchanged content; a real Compass change continues to redraw its highlight. These optimizations preserve camera and save behavior, renderer thresholds, accessibility, and the 64-total DOM overlay cap.
+
 The multi-selection Inspector compares every selected object's title, family, and clue using a semantic definition list. Details scroll independently while batch-move controls stay pinned, and the 40-item selection cap is fully represented.
 
-The laboratory is a continuous 5,200 × 3,400 coordinate space. A fresh game contains 174 deterministic entities: the original 150 canonical items plus 24 authored second-chapter records. The original IDs and definitions remain unchanged. The chapter adds three collections of authored records spanning handwritten notes, experiment records, map fragments, and formula cards. At detail scale, visible objects are positioned DOM elements. At overview scale (0.4 or lower) or when more than 400 items are visible, a 0.5-pixel-per-world-unit Canvas paints the full item set while the renderer keeps a 64-total DOM overlay cap that includes ordinary cards and forced selected, dragged, and keyboard-focused cards. Hysteresis returns to detail only at scale 0.5 or higher and 320 or fewer visible items. A 320px uniform-grid index supplies viewport candidates and Canvas hit-test candidates; exact rotated-card geometry resolves the topmost hit. The keyboard-accessible Item Finder paginates 25 items at a time and can focus distant objects into crisp detail.
+The laboratory is a continuous 5,200 × 3,400 coordinate space. A fresh game contains 174 deterministic entities: the original 150 canonical items plus 24 authored second-chapter records. The original IDs and definitions remain unchanged. The chapter adds three collections of authored records spanning handwritten notes, experiment records, map fragments, and formula cards. At detail scale, visible objects are positioned DOM elements. At overview scale (0.4 or lower) or when more than 256 items are visible, a 0.5-pixel-per-world-unit Canvas paints the full item set while the renderer keeps a 64-total DOM overlay cap that includes ordinary cards and forced selected, dragged, and keyboard-focused cards. Hysteresis returns to detail only at scale 0.5 or higher and 192 or fewer visible items. This leaves the 174-item starting view in detail while moving the dense 5,024-item start view to Canvas; the latter's three measured wheel-zoom p95 values were 16.8, 16.7, and 16.8 ms. See the [dense starting-view threshold report](performance/2026-11-03-dense-start-render-threshold.md) for trial data and limits. A 320px uniform-grid index supplies viewport candidates and Canvas hit-test candidates; exact rotated-card geometry resolves the topmost hit. The keyboard-accessible Item Finder paginates 25 items at a time and can focus distant objects into crisp detail.
+
+At widths up to 720px, the Notebook/Skills left panel and Inspector/Puzzle right
+panel are mutually exclusive. Opening one side closes the other; selecting an
+item closes the left panel and opens Inspector. Desktop retains its two-side
+coexistence and selection behavior. If a desktop layout with both sides open is
+resized to compact width, the right panel remains open and the left closes.
+Collection completion on compact prioritizes a newly unlocked Puzzle; if no
+puzzle unlocks, it shows Notebook and closes Inspector. These are transient
+panel-visibility rules and do not alter selection, progression, saves, or
+camera state.
+
+At compact widths, the Clockwork Atlas and side panels are mutually exclusive:
+opening Atlas closes Notebook, Instruments, Inspector, or Puzzle, and opening a
+side panel closes Atlas. Desktop Atlas/panel coexistence remains unchanged. If
+Atlas and a right panel are open when resizing to compact, Atlas closes and the
+right panel remains. Closing Atlas from a side-panel control keeps focus on
+that control; when resizing closes an Atlas that held focus, focus returns to
+the Atlas toggle. These transitions leave the camera, selection, and save data
+unchanged.
+
+At compact widths, Finder and Notebook/Skills are mutually exclusive. Opening
+one closes the other. Desktop Finder/Notebook coexistence remains unchanged,
+as do existing Finder/Inspector and Atlas/Finder transitions. If desktop
+resizes to compact while Finder and a side panel are both open, Finder closes
+and the side panel remains. A side-panel action that closes Finder keeps focus
+on that control; if resizing closes a Finder that held focus, focus returns to
+the Finder toggle. These are transient UI changes and do not affect selection,
+camera state, or saves.
+
+Item Finder updates its visible filtered results, match count, and page text
+immediately; only its separate polite status is debounced. The visible count
+and page are not live regions. A settled query or query clear announces the
+matching count and current page together, while Previous/Next announces the
+new page and count once. If navigation occurs before a query timer settles,
+the page action cancels and clears that timer and announces the current page
+and count together, preventing a stale query message from overwriting it.
+Announcements are transient and do not change filtering, result order, focus,
+scrolling, camera behavior, or saved state.
 
 Fresh default-seed filler placement remains deterministic within the existing family clusters. The first-session refinement reduced axis-aligned overlap pairs in the 174-item starting layout from 259 to 1, with no fully occluded items. It preserved authored cluster coordinates, item count/order/IDs/families/clues/destinations, and saved item positions. The Inspector now scrolls long details separately while keeping its move controls visible at 1084 × 827 and at the 390 × 480 responsive viewport; 390 × 600 also passes.
 
 Pointer-to-world math is shared by pan, zoom, and item movement. Touch users can pinch with two fingers to zoom around the moving midpoint; lifting one finger rebases the remaining contact into a continuous one-finger pan. A second touch during item drag cancels the drag without dropping or moving the item. The gesture commits camera changes through the existing save path and adds no saved fields. The world also supports keyboard panning/zoom, item selection, inspector moves, and cancellation with pointercancel or Escape. Keyboard activation hands focus to the inspector's target selector; after Move succeeds or is rejected for capacity, focus stays on Move and a live status announces the result.
+
+Closing Inspector returns focus to its selected world-item control. For a group
+selection, the current selected item is preferred, with the first selected ID
+as a fallback when that item cannot receive focus. A candidate is accepted
+only when it becomes `document.activeElement`; otherwise the next selected ID
+is tried. Closing Puzzle returns focus to the persistent Open Puzzle header
+control. These close actions only restore keyboard focus; selection, camera,
+and progression remain unchanged.
+
+The toolbar keeps the visible zoom percentage as a non-live readout and exposes
+settled zoom changes through a separate polite screen-reader status. The initial
+camera value and pan-only changes are silent. Wheel bursts coalesce to one
+final percentage; toolbar zoom announces after its update settles. Pinch
+announcements remain suppressed for the entire active pinch, including pauses
+longer than the debounce interval, then report the final scale once when a
+finger lifts. The continued one-finger pan stays silent. A rollback to the last
+announced percentage does not repeat that announcement. The controller's
+`pinchActive` signal is transient UI coordination only; camera math, save
+behavior, renderer policy, and world content are unchanged.
+
+`src/ui/useWorldViewportController.js` owns camera, culling, and viewport-size
+state; the spatial index; camera scheduling and zoom timers; pointer, touch,
+pinch, and Space gesture refs; drag preview; the keyboard listener;
+`ResizeObserver`; and the main pointer, wheel, zoom, and focus handlers.
+`WorldViewport` keeps DOM refs and Atlas state, and supplies the Atlas-gated
+camera-preview and title-reveal positioning callbacks. External camera changes
+cancel and release active gestures without rolling back the incoming camera;
+resize and unmount paths refresh or cancel work and release captures/timers.
+
+Selected title reveals remain readable while allowing pointer input through to
+another card beneath them. The selected reveal uses `pointer-events: none`; the
+controller checks its screen bounds so a pointer over the reveal's empty spill
+area does not start a world pan, while an overlapping different card can still
+be selected or dragged. Keyboard/focus behavior and card geometry are unchanged.
 
 Pointer drops and inspector moves use one capacity-aware slot allocator. It chooses the nearest free slot for pointer placement, counts invalid items against capacity, rejects new arrivals to full targets without changing state, and allows an occupant to move within its current full target.
 
@@ -53,6 +130,12 @@ collapsed by default at 390 × 480 and 320 × 480; reduced-motion settings make
 map and camera changes immediate. Atlas visibility and crosshair are transient
 UI state; no world content, entities, or save fields are added. Camera
 recentring uses the existing camera field and persistence path.
+
+`src/ui/WorldAtlasPanel.jsx` owns the Atlas panel's accessible presentation and
+derived display geometry (density cells, camera outline, and projected
+crosshair). `WorldViewport` retains Atlas interaction state and orchestration,
+including camera gestures, Finder mutual exclusion, and the callbacks passed to
+the panel.
 
 At viewport widths up to 720px, the world toolbar wraps instead of shrinking
 controls or clipping them in a horizontal scroller. Its children retain their
@@ -86,6 +169,8 @@ unchanged.
 
 Playback is opt-in through the **Sound effects** Settings control. The version 1 preferences record adds `soundEffectsEnabled`, defaulting to `false`; older records preserve their text-scale and reduced-motion settings and receive the new default. Preferences are stored outside autosaves, backups, imports, and the game-save schema. AudioContext creation or resume is attempted only after a trusted pointer or keyboard gesture while effects are enabled. Events received while muted or suspended are discarded without queueing or later replay. Playback bounds duration, gain, simultaneous voices, and repeated-event rate; turning effects off stops active cues, and teardown removes the subscription and closes the context. Unsupported Web Audio and context/playback failures are isolated from gameplay and can be retried after a later gesture.
 
+When sound effects are enabled, Settings also offers **Preview sound**. The action uses a short internal cue through the same gesture-based unlock and playback safeguards. It is not a gameplay event, is not part of `GAME_AUDIO_EVENT_TYPES`, and does not change progression or game saves. The control is disabled while effects are off and its live status reports whether the preview played.
+
 | Target | Grid | Capacity |
 | --- | --- | ---: |
 | Harmonic Calibration folio | 4 × 2 | 8 |
@@ -109,9 +194,11 @@ current occupancy and capacity.
 
 ## Progress and persistence
 
-The first chapter's eight-card Harmonic Calibration collection grants one skill point and unlocks its pulse-sequence puzzle once. The Resonance Lens briefly highlights other members of the selected item's collection, or items of the same family when the selection is not in a collection. It does not move or file items.
+The first chapter's eight-card Harmonic Calibration collection grants one skill point and unlocks its pulse-sequence puzzle once. The Resonance Lens briefly highlights other members of the selected item's collection, or items of the same family when the selection is not in a collection. It does not move or file items. The relation IDs are shared by the detail DOM renderer and Canvas overview, which paints a high-contrast star marker rotated with each matched card. Detail cards carry an accessible source label, while Canvas-only highlighted titles are exposed in a screen-reader-only list. A single polite activation message names the focused item and match count; activation leaves item state and autosave unchanged. These cues preserve the Canvas renderer and its 64-total DOM overlay cap.
 
 The second chapter adds three eight-item collections: **The Bell Before Dawn**, **Meridian Survey**, and **Parallax Trials**. Each contains two handwritten notes, two experiment records, two map fragments, and two formula cards, has a dedicated eight-slot destination, and grants one skill point once. The **Missing Member Compass** costs one point and highlights one loose member of the selected chapter collection; it does not move, file, or validate items. Completing all three collections unlocks **Chronology of the Last Bell**. Solving the dated sequence adds a notebook discovery and advances the Palimpsest Engine to **Chronology Wheel**.
+
+Collection completion rewards are permanent milestones: `progress.completedCollectionIds`, earned skill points, and `unlockedPuzzleIds` remain after a player moves an item out of a rewarded collection. Current collection completion, destination badges, Notebook placement summaries, the App chapter count, and full-restoration eligibility derive from the items' actual current placements. The Notebook labels a moved-but-rewarded collection **Reward earned; refiling needed**. `InventionCore.completedCollections` remains a boolean assembly-stage fallback tied to earned history; puzzle access and solve prerequisites use earned collection markers and unlocked puzzle IDs. V3 normalization accepts moved members when the earned marker exists, while still rejecting a fully filed collection without its marker or a chronology unlock without every required earned marker. This preserves strict validation without changing the save schema or ending conditions.
 
 `src/ui/InventionCore.jsx` renders the Engine's current stage with repo-native React/CSS: Dormant shows the brass frame and dim, empty lens; Memory Crystal adds a faceted illuminated crystal; Chronology Wheel retains that crystal and adds a toothed, spoked wheel. Stage labels and descriptions remain readable, decorative parts are hidden from assistive technology, and wheel motion respects saved and OS reduced-motion preferences. The Engine's viewport-culling AABB passes its top-left coordinate (`center - half dimensions`) and full width/height to `isNearViewport()`; `.invention-anchor` positioning continues to use the Engine center. Stage visuals do not alter progression, entity count, or v3 save data.
 
@@ -121,6 +208,8 @@ When those conditions hold, the accessible completion presentation shows an evid
 
 The canonical save schema is v3, compressed with LZ-String in localStorage. V3 strictly validates item IDs, placement targets, slot positions, dimensions, world bounds, capacities, collection completion, and chronology prerequisites. `Modular Worktables` ownership is stored in the existing `progress.ownedSkills` list and does not change the v3 schema. V3 normalization derives scratch-pad capacity from validated ownership before checking placements: slots 24–29 and up to 30 occupants are valid only while the skill is owned. Without the skill, the original 24-slot limit applies. V1 and v2 saves remain supported and continue to use their existing legacy skill-ID whitelist, so migration cannot introduce `modular-worktables`; existing slots and placements are preserved under the old capacity. V1 placement migration preserves its slot-allocation and overflow-salvage behavior; v2 migration preserves supported existing item records and placements, progress, notebook, camera, optional selected item and content seed, and invention stage. Both legacy versions append the 24 authored chapter items exactly once. The v3 item limit is 5,024. A valid raw v1/v2 autosave is preserved in recovery before replacement. Imports migrate and validate before backup or apply; rejected imports leave live state and stored saves unchanged.
 
+When a chapter collection has been rewarded, moving a member preserves its `completedCollectionIds` entry, skill point, and any earned puzzle unlock across v3 normalization and autosave/reload. UI counts and placement status remain derived from current items: destination badges, Notebook completion/summary, and the App header can show an incomplete collection even though its reward remains earned. Chronology availability and solving use earned prerequisite markers, whereas full restoration still requires every item and collection to be currently complete.
+
 **Aether Wayfinder** ownership uses the existing v3 `progress.ownedSkills`
 field and current skill catalog; the schema remains v3 and the v1/v2 legacy
 skill whitelist is unchanged. Its active timer and guided item/destination
@@ -128,6 +217,8 @@ presentation are transient app state and are excluded from game saves,
 imports, and autosaves.
 
 The Save & Restore dialog provides three fixed browser-local manual save slots. Each new slot record is a version 1 metadata envelope containing its slot ID, ISO save time, and the existing compressed v3 payload; this does not change the game-save schema. Slot 1 reuses `MANUAL_SAVE_KEY`; an existing raw compressed value there is recognized as a legacy save with an unknown timestamp and is not rewritten until confirmed overwrite. Saving into an empty slot is immediate; overwriting and deletion require confirmation. Restore also requires confirmation, validates through the existing import path, and writes the current state to `BACKUP_SAVE_KEY` before applying the slot. A validation or backup failure leaves the current game and slot unchanged. A corrupt slot is isolated from its neighbors, and browser storage failures are reported without changing live progress. Successful restore follows the existing import and autosave behavior.
+
+Settings, Save & Restore, and the completion presentation share the focus-containment behavior in `src/ui/modalFocus.js`. Tab from outside an open dialog recovers focus to its first control; Shift+Tab recovers to its last. Opening an overwrite, delete, or restore confirmation moves focus to its first available action, and cancelling or completing the action returns focus to the corresponding save control. Each dialog retains its existing initial-focus and Escape behavior.
 
 Accessibility preferences are stored separately from game saves under a versioned key by `src/game/preferences/preferences.js`. Text scale uses a browser-relative 100% root baseline with 100%, 112.5%, and 125% multipliers. Effective reduced motion combines the user's optional Always reduce motion preference with the operating system's `prefers-reduced-motion`; the user option can add reduction but cannot override the OS. Preferences do not change autosaves, backups, imports, or the game save schema.
 
@@ -140,7 +231,7 @@ The visual system uses low-frequency texture and distinct item-family silhouette
 
 Compact filed notes show their complete title in a reveal on hover, keyboard focus, or selection. The reveal stays within an 8px inset of the laboratory viewport and adjusts its placement to camera zoom and text scale. It remains transient and does not change item or save geometry.
 
-The completion presentation is a keyboard-operable modal with focus moved to its heading and restored on dismissal, a live congratulations status, and a **Continue exploring** button. Reduced-motion mode removes projection animation while preserving its meaning and all completion content.
+The completion presentation is a keyboard-operable modal with focus moved to its heading and restored on dismissal, a live congratulations status, and a **Continue exploring** button. Tab and Shift+Tab recover focus to its boundary controls if focus leaves the dialog; Escape does not dismiss the ending. Reduced-motion mode removes projection animation while preserving its meaning and all completion content.
 
 Known limitations:
 
@@ -195,10 +286,22 @@ Second-chapter milestone verification on 2026-11-03:
 - Asset-free audio event hooks: unit tests 6/6; focused E2E 33/33 across the organising, save-recovery, research, and ending flows; `npm run build` passed with Vite 8.3.5; Code Reviewer found no remaining actionable issues. The full test suite was not run. The separate human-playthrough/content-expansion gate remains active.
 - Persistent accessibility preferences: unit tests 9/9; focused preferences E2E 5/5, including 125% root/body font sizing, 390 × 480 layout, and live OS reduced-motion changes; `npm run build` passed with Vite 8.3.5; Code Reviewer confirmed both findings resolved with no remaining issues. The full test suite was not run.
 - Optional audio playback: the Web Audio adapter and version 1 preferences compatibility unit command passed 19/19; focused audio, preferences, and manual-save browser tests passed 9/9; `npm run build` passed with Vite 8.3.5; Reviewer re-review found no actionable issues. Automated checks verify event-to-cue wiring and gesture gating; a human listening-quality check remains part of broader release polish. The full test suite was not run.
+- Settings audio preview (2026-11-03): adapter unit tests passed 12/12; `npx playwright test e2e/lab/audio-settings.spec.js --workers=1` passed 4/4; `npm run build` passed with Vite 8.3.5; Code Reviewer re-review found no actionable findings. The full test suite was not run; human listening-quality review remains open.
 - Modular Worktables: `npm run test:game` passed 55/55; `npm run test:e2e -- --workers=1 e2e/lab/scratch-pad-capacity.spec.js e2e/lab/organising-loop.spec.js` passed 12/12; `npm run build` passed with Vite 8.3.5; Code Reviewer found no actionable issues. The full test suite was not run. Independent human playtesting and content expansion remain gated.
 - Mobile world toolbar (2026-11-03): `npm run test:e2e -- --workers=1 e2e/lab/mobile-toolbar.spec.js` passed 3/3 at 390 × 480, 320 × 480, and 1440 × 900. Coverage checks toolbar/control bounds and wrapping, the 154px location selector, selection feedback, and non-overlap among toolbar, hint, and toast. `npm run build` passed; final review found no actionable issues. The full suite was not run.
 - Aether Wayfinder (2026-11-03): focused Wayfinder E2E passed 12/12; panel-coordination E2E passed 8/8; the named game-systems unit check passed 2/2; `npm run build` passed with Vite 8.3.5. Final review found no actionable findings. Tests cover non-mutating activation, workspace/scratch-pad/misfiled eligibility, seven-second guide and cleanup, destination focus and low-zoom readability, accessible item-and-destination naming/status, and OS/user reduced-motion behavior. The full test suite was not run; the independent human-playtest/content-expansion gate remains open.
-- Touch pinch navigation (2026-11-03): `node --test --test-isolation=none --test-name-pattern="pinch zoom" tests/unit/game-foundation/camera-pinch.test.mjs` passed 4/4; `npm run test:e2e -- --workers=1 e2e/lab/touch-navigation.spec.js` passed 6/6; `npm run build` passed with Vite 8.3.5; Code Reviewer found no actionable issues. Browser coverage verifies empty-space pan, moving-midpoint pinch anchoring, lift-to-pan, item-drag cancellation without placement change, and separate pan and pinch autosave/reload. The full suite was not run. The user deferred the independent human playtest for now; its gate remains open and content expansion remains gated.
+- Touch pinch navigation (2026-11-03): `node --test --test-isolation=none --test-name-pattern="pinch zoom" tests/unit/game-foundation/camera-pinch.test.mjs` passed 4/4; the touch-navigation E2E passed 7/7, including resize-during-pan cancellation; `npm run build` passed with Vite 8.3.5; Code Reviewer found no actionable issues. Browser coverage verifies empty-space pan, moving-midpoint pinch anchoring, lift-to-pan, item-drag cancellation without placement change, resize cancellation, and separate pan and pinch autosave/reload. The full suite was not run. The user deferred the independent human playtest for now; its gate remains open and content expansion remains gated.
+- Resonance Lens highlight polish (2026-11-03): `node --test --test-isolation=none tests/unit/game-foundation/skill-highlights.test.mjs` passed 2/2; `npm run test:e2e -- --workers=1 e2e/lab/resonance-lens-highlights.spec.js e2e/lab/research-chapter.spec.js --grep "Lens|v2 migration preserves"` passed 3/3; `npm run build` passed with Vite 8.3.5. Verification covers Canvas-only screen-reader titles, a rotated Canvas highlight marker, the single Lens live announcement with item/match count, Compass journey continuity, and saved item/state immutability. Code review and re-review found no actionable findings. The full suite was not run; the independent human-playtest/content-expansion gate remains open. See the [archived plan](archive/plans/2026-11-03-resonance-lens-highlight-polish.md).
+- Camera-only render and overview redraw optimization (2026-11-03): focused unit checks passed 11/11 and organizing/highlight browser checks passed 22/22. `npm run test:perf` built with Vite 8.3.5 (56 modules) and passed 1/1. Starting-view wheel p95 was 33.4/49.9/33.3 ms at 174 items with no interval over 50 ms; at 5,024 items it was 50/50.1/50 ms with one over-50 ms interval in one trial and no over-50 ms long tasks. Full-world 5,024-item wheel p95 was 16.8/16.8/16.7 ms with no over-50 ms interval. `npx playwright test --config=playwright.benchmark.config.js` passed 1/1 after a reviewer guard fix. Across 15 measured full-world views (five sizes by three trials), mode stayed overview before and after camera-only zoom, `clearRect` delta was zero, the 64-card overlay cap held, and all Canvas entities were represented. The original red baseline showed three clears on a camera-only wheel zoom. Reviewer found no source-level issues; the low-severity test guard finding was fixed and rerun green. The full suite was not run; the independent human-playtest/content-expansion gate remains open. See the [archived plan](archive/plans/2026-11-03-dense-starting-view-responsiveness.md).
+- Dense starting-view render threshold (2026-11-03): render-policy unit tests passed 3/3; opt-in performance E2E passed 12/12; the Vite 8.3.5 build and serial five-size benchmark passed, with the benchmark completing 1/1 in 1.9 minutes. The 256/192 visible-item hysteresis keeps the 174-item view in detail and paints the dense 5,024-item start on Canvas with 64 overlays. Its measured start-view wheel p95 was 16.8/16.7/16.8 ms, with no measured interval or long task above 50 ms. Code Reviewer found no actionable findings; `git diff --check` was clean. The full suite was not run, and the independent human-playtest/content-expansion gate remains open. See the [dated performance report](performance/2026-11-03-dense-start-render-threshold.md) and [archived plan](archive/plans/2026-11-03-dense-starting-view-render-threshold.md).
+- Chapter completion reload preservation (2026-11-03): normalization tests passed 3/3, completion unit tests passed 6/6, and the focused research-chapter E2E passed 1/1, including visible Notebook reward/refiling status and autosave/reload preservation of the moved item and earned milestones. `npm run build` passed with Vite 8.3.5 (59 modules); Code Reviewer found no remaining issues and `git diff --check` was clean. Red baselines caught both incorrect current chapter counts after refiling and the Notebook status appearing only in its accessible name, not visible row text. The full suite was not run. See the [archived plan](archive/plans/2026-11-03-chapter-completion-reload-preservation.md).
+- Zoom announcement accessibility (2026-11-03): focused zoom-announcement E2E passed 8/8, including wheel coalescing, toolbar/pinch settlement, initial and pan silence, a >220 ms active-pinch pause, continuation-pan silence, and Escape rollback without duplicate status. Existing research and touch-navigation E2E passed 14/14; the Vite 8.3.5 production build passed; Reviewer re-review found no actionable findings; scoped `git diff --check` was clean. The full suite was not run. The red staged-pinch baseline recorded an intermediate `23%` while both fingers were still down; the rollback case passed 1/1. See the [archived plan](archive/plans/2026-11-03-zoom-announcement-debounce.md).
+- Item Finder announcement polish (2026-11-03): focused Finder announcement E2E passed 4/4; panel-coordination E2E passed 8/8; the Vite production build passed; Code Reviewer found no actionable findings and scoped `git diff --check` was clean. Visible query filtering and page navigation remain immediate. The one polite status announces settled query/clear count plus page, and page changes announce combined page/count while cancelling any pending query timer. The race red baseline showed `Page 2 of 7.` overwritten by `174 matching items.` after 350 ms; the final regression requires one `Page 2 of 7. 174 matching items.` status. The full suite was not run. See the [archived plan](archive/plans/2026-11-03-item-finder-announcement-polish.md).
+- Compact panel exclusivity (2026-11-03): the five new compact-panel cases passed 5/5 and the full panel-coordination E2E passed 13/13. They cover compact selection/manual panel changes, desktop coexistence and resize, both collection-completion outcomes, and usable Inspector Move controls at 390 × 480. The Vite production build passed; Code Reviewer found no actionable findings and the scoped diff-check was clean apart from expected CRLF conversion warnings. The full suite was not run. See the [archived plan](archive/plans/2026-11-03-compact-panel-exclusivity.md).
+- Compact Clockwork Atlas coordination (2026-11-03): focused Atlas regressions passed 3/3; combined `world-atlas.spec.js` and `panel-coordination.spec.js` passed 27/27. The desktop-resize case verifies Atlas map focus before resizing and focus returning to the Atlas toggle when Atlas held focus. The Vite production build passed; Code Reviewer confirmed both findings resolved with no remaining issues. Scoped diff-check was clean aside from expected LF-to-CRLF conversion warnings. The full suite was not run. See the [archived plan](archive/plans/2026-11-03-compact-atlas-exclusivity.md).
+- Compact Finder/side-panel coordination (2026-11-03): focused regressions passed 4/4; combined panel-coordination, Atlas, and Item Finder announcement E2E passed 35/35. Coverage verifies compact Finder/Notebook transitions, desktop coexistence, existing Inspector/Finder and Atlas/Finder behavior, and resize closure with conditional focus return. The production build passed; Code Reviewer found no issues; scoped diff-check was clean aside from expected line-ending warnings. The full suite was not run. See the [archived plan](archive/plans/2026-11-03-compact-finder-exclusivity.md).
+- Inspector and Puzzle close focus return (2026-11-03): the three focused cases passed 3/3; relevant `filed-note-title.spec.js`, `organising-loop.spec.js`, and `panel-coordination.spec.js` passed 40/40. Closing Inspector restores focus to the selected item; for groups it prefers the current selection and implements a first-selected-ID fallback. Closing Puzzle restores focus to the persistent Open Puzzle control. At that time, the fallback was not directly regression-tested. The build passed; Reviewer found no issues; scoped diff-check was clean aside from LF-to-CRLF warnings. The full suite was not run. See the [archived plan](archive/plans/2026-11-03-panel-close-focus-return.md).
+- Inspector focus fallback follow-up (2026-11-03): the disabled-current-item group regression verifies that focus continues to the first selected item and both items remain selected. The focused selected-item, Puzzle, and fallback checks passed 3/3; the production build passed; Code Reviewer found no functional issue; scoped diff-check was clean aside from the expected LF-to-CRLF warning. The full suite was not run. See the [archived plan](archive/plans/2026-11-03-inspector-focus-fallback.md).
 - Reviewer re-review found no remaining blockers.
 - The full test suite was not run.
 

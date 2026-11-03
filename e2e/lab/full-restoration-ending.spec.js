@@ -6,6 +6,7 @@ import { decodeSave, encodeSave } from '../../src/game/persistence/save.js';
 import { allocateTargetPlacement } from '../../src/game/world/placementLayout.js';
 
 const autoSaveKey = 'palimpsest-laboratory.autosave.v1';
+const preferencesKey = 'palimpsest-laboratory.preferences.v1';
 
 function createAlmostCompleteFixture() {
   const fresh = createNewGameState();
@@ -77,6 +78,53 @@ function createFullyFiledState() {
       ? { ...entry, position: allocation.position, placement: allocation.placement, rotation: 0, validation: 'correct' }
       : entry),
   });
+}
+
+async function openEndingFromAlmostCompleteFixture(page) {
+  const fixture = createAlmostCompleteFixture();
+  await page.addInitScript(({ saveKey, savedPreferencesKey, value }) => {
+    window.localStorage.setItem(saveKey, value);
+    window.localStorage.setItem(savedPreferencesKey, JSON.stringify({
+      version: 1,
+      textScale: 1.25,
+      reduceMotion: false,
+      soundEffectsEnabled: false,
+    }));
+  }, {
+    saveKey: autoSaveKey,
+    savedPreferencesKey: preferencesKey,
+    value: fixture.encodedSave,
+  });
+  await page.goto('/');
+
+  await page.getByRole('button', { name: 'Find an item' }).click();
+  const search = page.getByRole('searchbox', { name: 'Search laboratory items' });
+  await search.fill(fixture.finalItem.title);
+  await page.getByTestId(`item-finder-result-${fixture.finalItem.id}`).click();
+  await page.getByTestId('move-target').selectOption(fixture.finalItem.correctDestinationId);
+  await page.getByTestId('move-item').click();
+
+  const ending = page.getByTestId('completion-sequence');
+  await expect(ending).toBeVisible();
+  return ending;
+}
+
+async function expectFullyReachableWithinEndingScrollArea(element) {
+  await element.scrollIntoViewIfNeeded();
+  const bounds = await element.evaluate((node) => {
+    const scrollArea = node.closest('.completion-sequence__dialog');
+    const elementRect = node.getBoundingClientRect();
+    const scrollRect = scrollArea.getBoundingClientRect();
+    const scrollTop = scrollRect.top + scrollArea.clientTop;
+    return {
+      top: elementRect.top,
+      bottom: elementRect.bottom,
+      scrollTop,
+      scrollBottom: scrollTop + scrollArea.clientHeight,
+    };
+  });
+  expect(bounds.top, 'content should be reachable below the dialog top edge').toBeGreaterThanOrEqual(bounds.scrollTop - 1);
+  expect(bounds.bottom, 'content should be reachable above the dialog bottom edge').toBeLessThanOrEqual(bounds.scrollBottom + 1);
 }
 
 function createMisfiledItemState() {
@@ -263,6 +311,137 @@ test('the final correct filing triggers the Engine ending once and keeps the res
   expect(reloadedSave.progress.completedCollectionIds).toEqual(expect.arrayContaining(COLLECTIONS.map((collection) => collection.id)));
   expect(reloadedSave.progress.solvedPuzzleIds).toEqual(expect.arrayContaining(PUZZLES.map((puzzle) => puzzle.id)));
 });
+
+test('the completion dialog recovers Tab focus when focus moves outside it', async ({ page }) => {
+  const fixture = createAlmostCompleteFixture();
+  await page.addInitScript(({ key, value }) => window.localStorage.setItem(key, value), {
+    key: autoSaveKey,
+    value: fixture.encodedSave,
+  });
+  await page.goto('/');
+
+  await page.getByRole('button', { name: 'Find an item' }).click();
+  const search = page.getByRole('searchbox', { name: 'Search laboratory items' });
+  await search.fill(fixture.finalItem.title);
+  await page.getByTestId(`item-finder-result-${fixture.finalItem.id}`).click();
+  await page.getByTestId('move-target').selectOption(fixture.finalItem.correctDestinationId);
+  await page.getByTestId('move-item').click();
+
+  const ending = page.getByTestId('completion-sequence');
+  await expect(ending).toBeVisible();
+  await expect(ending.getByRole('heading', { name: 'The laboratory is restored' })).toBeFocused();
+  const continueExploring = ending.getByRole('button', { name: 'Continue exploring' });
+  const outsideControl = page.getByTestId('open-settings');
+
+  await outsideControl.focus();
+  await page.keyboard.press('Tab');
+  await expect(continueExploring).toBeFocused();
+
+  await outsideControl.focus();
+  await page.keyboard.press('Shift+Tab');
+  await expect(continueExploring).toBeFocused();
+  await expect(ending).toBeVisible();
+});
+
+for (const viewport of [
+  { width: 320, height: 480 },
+  { width: 390, height: 480 },
+]) {
+  test(`the restoration ending stays readable and keyboard reachable at ${viewport.width}x${viewport.height} with 125% text`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    const ending = await openEndingFromAlmostCompleteFixture(page);
+    const dialog = ending.getByRole('dialog');
+    const textScale = await page.locator('html').evaluate((root) => (
+      getComputedStyle(root).getPropertyValue('--text-scale').trim()
+    ));
+    expect(textScale).toBe('1.25');
+
+    const heading = ending.getByRole('heading', { name: 'The laboratory is restored' });
+    await expect(heading).toBeFocused();
+    await expect.poll(() => dialog.evaluate((node) => node.scrollHeight > node.clientHeight))
+      .toBe(true);
+    await dialog.evaluate((node) => { node.scrollTop = 0; });
+
+    const narrative = ending.locator('.completion-sequence__narrative');
+    const status = ending.getByRole('status');
+    const stats = ending.locator('.completion-sequence__stat');
+    await expect(stats).toHaveCount(6);
+
+    for (const content of [narrative, status]) {
+      await expect(content).toBeVisible();
+      await expectFullyReachableWithinEndingScrollArea(content);
+    }
+    for (let index = 0; index < 6; index += 1) {
+      const stat = stats.nth(index);
+      await expect(stat).toBeVisible();
+      await expectFullyReachableWithinEndingScrollArea(stat);
+    }
+
+    expect(await dialog.evaluate((node) => node.scrollTop), 'the dialog should scroll to reach its ending content')
+      .toBeGreaterThan(0);
+
+    const continueExploring = ending.getByRole('button', { name: 'Continue exploring' });
+    await page.keyboard.press('Tab');
+    await expect(continueExploring).toBeFocused();
+    const continueBounds = await continueExploring.evaluate((button) => {
+      const dialog = button.closest('.completion-sequence__dialog');
+      const buttonRect = button.getBoundingClientRect();
+      const dialogRect = dialog.getBoundingClientRect();
+      const scrollTop = dialogRect.top + dialog.clientTop;
+      const scrollLeft = dialogRect.left + dialog.clientLeft;
+      return {
+        top: buttonRect.top,
+        bottom: buttonRect.bottom,
+        left: buttonRect.left,
+        right: buttonRect.right,
+        scrollTop,
+        scrollBottom: scrollTop + dialog.clientHeight,
+        scrollLeft,
+        scrollRight: scrollLeft + dialog.clientWidth,
+        windowWidth: window.innerWidth,
+        windowHeight: window.innerHeight,
+      };
+    });
+    expect(continueBounds.top, 'Continue should be within the dialog scrollport after keyboard focus')
+      .toBeGreaterThanOrEqual(continueBounds.scrollTop - 1);
+    expect(continueBounds.bottom, 'Continue should be within the dialog scrollport after keyboard focus')
+      .toBeLessThanOrEqual(continueBounds.scrollBottom + 1);
+    expect(continueBounds.left, 'Continue should be inside the visible window after keyboard focus')
+      .toBeGreaterThanOrEqual(Math.max(continueBounds.scrollLeft, 0) - 1);
+    expect(continueBounds.right, 'Continue should be inside the visible window after keyboard focus')
+      .toBeLessThanOrEqual(Math.min(continueBounds.scrollRight, continueBounds.windowWidth) + 1);
+    expect(continueBounds.top, 'Continue should be inside the visible window after keyboard focus')
+      .toBeGreaterThanOrEqual(-1);
+    expect(continueBounds.bottom, 'Continue should be inside the visible window after keyboard focus')
+      .toBeLessThanOrEqual(continueBounds.windowHeight + 1);
+
+    const horizontalMeasurements = await ending.locator([
+      '.completion-sequence',
+      '.completion-sequence__dialog',
+      '.completion-sequence__content',
+      '.completion-sequence__stats',
+      '.completion-sequence__stat',
+    ].join(', ')).evaluateAll((elements) => elements.map((element) => ({
+      name: element.className,
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      left: element.getBoundingClientRect().left,
+      right: element.getBoundingClientRect().right,
+    })));
+    for (const measurement of horizontalMeasurements) {
+      expect(measurement.scrollWidth, `${measurement.name} should not overflow horizontally`)
+        .toBeLessThanOrEqual(measurement.clientWidth + 1);
+      expect(measurement.left, `${measurement.name} should remain inside the viewport`)
+        .toBeGreaterThanOrEqual(-1);
+      expect(measurement.right, `${measurement.name} should remain inside the viewport`)
+        .toBeLessThanOrEqual(viewport.width + 1);
+    }
+
+    await page.keyboard.press('Enter');
+    await expect(ending).toBeHidden();
+  });
+}
 
 test('importing a restored save shows the ending without activation, then real completion activates once', async ({ page }) => {
   await page.goto('/');

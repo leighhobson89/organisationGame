@@ -21,6 +21,19 @@ async function waitForAutosave(page) {
   await expect(page.getByTestId('autosave-status')).toHaveText('Saved just now');
 }
 
+async function flushAnimationFrames(page, count = 2) {
+  await page.evaluate((frameCount) => new Promise((resolve) => {
+    const flushNextFrame = (remaining) => {
+      if (remaining === 0) {
+        resolve();
+        return;
+      }
+      requestAnimationFrame(() => flushNextFrame(remaining - 1));
+    };
+    flushNextFrame(frameCount);
+  }), count);
+}
+
 function createFullScratchPadSave(movingItemIndex = 32) {
   const items = generateLab('palimpsest-first-shift', 174);
   const scratchPadId = 'scratch-a';
@@ -274,6 +287,88 @@ test('pointer cancellation restores the camera transform after a pan gesture', a
   await expect.poll(() => scene.evaluate((element) => element.style.transform)).toBe(originalTransform);
 });
 
+test('unexpected pointer capture loss cancels a pan and ignores later movement', async ({ page }) => {
+  await page.goto('/');
+  const world = page.getByTestId('world-viewport');
+  const scene = page.locator('.world-scene');
+  const originalTransform = await scene.evaluate((element) => element.style.transform);
+  const cameraBefore = await scene.evaluate((element) => {
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
+    return { panX: matrix.e, panY: matrix.f, scale: matrix.a };
+  });
+  const start = await findEmptyViewportPoint(page);
+  const moved = { x: start.x + 76, y: start.y + 48 };
+
+  await page.evaluate(() => {
+    window.__e2ePointerId = null;
+    document.addEventListener('pointerdown', (event) => {
+      window.__e2ePointerId = event.pointerId;
+    }, { capture: true, once: true });
+  });
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(moved.x, moved.y, { steps: 4 });
+  await expect.poll(() => scene.evaluate((element) => element.style.transform)).not.toBe(originalTransform);
+
+  const pointerId = await page.evaluate(() => window.__e2ePointerId);
+  expect(pointerId).not.toBeNull();
+  await world.dispatchEvent('lostpointercapture', {
+    pointerId,
+    pointerType: 'mouse',
+    isPrimary: true,
+    clientX: moved.x,
+    clientY: moved.y,
+    button: -1,
+    buttons: 0,
+  });
+  await expect.poll(() => scene.evaluate((element) => element.style.transform)).toBe(originalTransform);
+
+  await page.mouse.move(moved.x + 52, moved.y + 34, { steps: 3 });
+  await flushAnimationFrames(page);
+  await page.mouse.up();
+  expect(await scene.evaluate((element) => element.style.transform)).toBe(originalTransform);
+  await waitForAutosave(page);
+  const savedCamera = decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey)).camera;
+  expect(savedCamera.panX).toBeCloseTo(cameraBefore.panX, 2);
+  expect(savedCamera.panY).toBeCloseTo(cameraBefore.panY, 2);
+  expect(savedCamera.scale).toBeCloseTo(cameraBefore.scale, 4);
+});
+
+test('resizing during a mouse pan restores the camera and ignores later movement', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/');
+  await waitForAutosave(page);
+
+  const scene = page.locator('.world-scene');
+  const originalTransform = await scene.evaluate((element) => element.style.transform);
+  const cameraBefore = await scene.evaluate((element) => {
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform);
+    return { panX: matrix.e, panY: matrix.f, scale: matrix.a };
+  });
+  const start = await findEmptyViewportPoint(page);
+
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 76, start.y + 48, { steps: 4 });
+  await expect.poll(() => scene.evaluate((element) => element.style.transform))
+    .not.toBe(originalTransform);
+
+  await page.setViewportSize({ width: 1024, height: 720 });
+  await expect.poll(() => scene.evaluate((element) => element.style.transform))
+    .toBe(originalTransform);
+
+  await page.mouse.move(start.x + 132, start.y + 88, { steps: 3 });
+  await flushAnimationFrames(page);
+  await page.mouse.up();
+  expect(await scene.evaluate((element) => element.style.transform)).toBe(originalTransform);
+
+  await waitForAutosave(page);
+  const savedCamera = decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey)).camera;
+  expect(savedCamera.panX).toBeCloseTo(cameraBefore.panX, 2);
+  expect(savedCamera.panY).toBeCloseTo(cameraBefore.panY, 2);
+  expect(savedCamera.scale).toBeCloseTo(cameraBefore.scale, 4);
+});
+
 test('Escape cancels an active item drag without moving or filing the item', async ({ page }) => {
   await page.goto('/');
   const item = page.getByTestId(`lab-item-${calibrationCard}`);
@@ -331,7 +426,7 @@ test('physical dragging files an item to a destination and moves another to a sc
   await expect(scratchPad).toBeVisible();
   await looseItem.dragTo(scratchPad, { targetPosition: { x: 140, y: 90 }, steps: 8 });
 
-  await expect(scratchPad).toHaveAttribute('aria-label', /1 objects here/i);
+  await expect(scratchPad).toHaveAttribute('aria-label', /1 of 24 spaces used/i);
   await expect(page.getByTestId('game-feedback')).toContainText(/temporary arrangement/i);
 });
 
@@ -372,7 +467,7 @@ test('a physical drop on a full scratch pad keeps the item loose and reports cap
   const scratchPad = page.getByTestId('scratch-scratch-a');
   const looseItem = page.getByTestId(`lab-item-${fixture.movingItemId}`);
   await expect(scratchPad).toBeVisible();
-  await expect(scratchPad).toHaveAttribute('aria-label', /24 objects here/i);
+  await expect(scratchPad).toHaveAttribute('aria-label', /24 of 24 spaces used/i);
   await expect(looseItem).toBeVisible();
   const before = await looseItem.boundingBox();
   expect(before).not.toBeNull();
@@ -384,7 +479,7 @@ test('a physical drop on a full scratch pad keeps the item loose and reports cap
     steps: 8,
   });
 
-  await expect(scratchPad).toHaveAttribute('aria-label', /24 objects here/i);
+  await expect(scratchPad).toHaveAttribute('aria-label', /24 of 24 spaces used/i);
   await expect(page.getByTestId('game-feedback')).toContainText(/full|capacity|slot/i);
   expect(await readAudioEventTypes(page)).toEqual([
     'item.pickup',
@@ -405,7 +500,7 @@ test('physical dragging an existing occupant within a full scratch pad is allowe
   await page.getByTestId('world-jump').selectOption('scratchpad:scratch-a');
   const scratchPad = page.getByTestId('scratch-scratch-a');
   const item = page.getByTestId(`lab-item-${fixture.movingItemId}`);
-  await expect(scratchPad).toHaveAttribute('aria-label', /24 objects here/i);
+  await expect(scratchPad).toHaveAttribute('aria-label', /24 of 24 spaces used/i);
   await expect(item).toBeVisible();
   const before = await item.boundingBox();
   expect(before).not.toBeNull();
@@ -417,7 +512,7 @@ test('physical dragging an existing occupant within a full scratch pad is allowe
     steps: 8,
   });
 
-  await expect(scratchPad).toHaveAttribute('aria-label', /24 objects here/i);
+  await expect(scratchPad).toHaveAttribute('aria-label', /24 of 24 spaces used/i);
   await expect(page.getByTestId('game-feedback')).toContainText(/temporary arrangement|work surface/i);
   await expect(page.locator('.inspector-meta strong')).toHaveText(/Analysis Table/i);
   const after = await item.boundingBox();
@@ -624,7 +719,7 @@ test('inspector capacity rejection keeps focus on Move and announces the result'
   const moveButton = page.getByTestId('move-item');
   await moveButton.click();
 
-  await expect(page.getByTestId('scratch-scratch-a')).toHaveAttribute('aria-label', /24 objects here/i);
+  await expect(page.getByTestId('scratch-scratch-a')).toHaveAttribute('aria-label', /24 of 24 spaces used/i);
   await expect(page.getByTestId('item-inspector')).toBeVisible();
   await expect(page.locator('.inspector-meta strong')).toHaveText(/Loose in the laboratory/i);
   await expect(moveButton).toBeFocused();

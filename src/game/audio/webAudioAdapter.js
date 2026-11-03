@@ -2,6 +2,7 @@ import { subscribeGameAudioEvents } from './audioEvents.js';
 
 const MAX_GAIN = 0.18;
 const MAX_CUES = 6;
+const SETTINGS_PREVIEW_TYPE = 'settings.preview';
 
 // Each motif is a short sequence of notes. Gaps keep the synthesized notes
 // distinct while limiting each cue to one active oscillator at a time.
@@ -59,6 +60,10 @@ const CUES = Object.freeze({
     { frequency: 780, duration: 0.11, waveform: 'sine', gain: 0.1 },
     { frequency: 1040, duration: 0.11, waveform: 'sine', gain: 0.1 },
     { frequency: 1320, duration: 0.14, waveform: 'sine', gain: 0.1 },
+  ],
+  [SETTINGS_PREVIEW_TYPE]: [
+    { frequency: 560, duration: 0.1, waveform: 'sine', gain: 0.075 },
+    { frequency: 740, duration: 0.12, waveform: 'sine', gain: 0.075 },
   ],
 });
 
@@ -180,16 +185,16 @@ export function createWebAudioAdapter({
   }
 
   function playCue(event) {
-    if (disposed || !isEnabled || !context || context.state !== 'running') return;
+    if (disposed || !isEnabled || !context || context.state !== 'running') return false;
     const notes = CUES[event?.type];
-    if (!notes) return;
+    if (!notes) return false;
 
     const startedAtMs = currentTimeMs();
     discardExpiredCues(startedAtMs);
 
     const lastAt = lastCueTimes.get(event.type);
-    if (lastAt !== undefined && startedAtMs - lastAt < minimumInterval) return;
-    if (activeCues.size >= MAX_CUES) return;
+    if (lastAt !== undefined && startedAtMs - lastAt < minimumInterval) return false;
+    if (activeCues.size >= MAX_CUES) return false;
 
     let offset = 0;
     const cueDuration = notes.reduce((sum, note) => sum + note.duration + 0.012, -0.012);
@@ -238,6 +243,7 @@ export function createWebAudioAdapter({
     }
 
     if (cue.voices.size === 0) removeCue(cue);
+    return cue.voices.size > 0;
   }
 
   function subscribe() {
@@ -294,6 +300,17 @@ export function createWebAudioAdapter({
     }
   }
 
+  async function preview() {
+    if (disposed || !isEnabled) return false;
+    try {
+      if (!await unlock()) return false;
+      return playCue({ type: SETTINGS_PREVIEW_TYPE });
+    } catch {
+      // Preview playback is optional and must not escape into Settings or gameplay.
+      return false;
+    }
+  }
+
   function closeContext() {
     if (!context) return;
     const closingContext = context;
@@ -330,5 +347,5 @@ export function createWebAudioAdapter({
 
   subscribe();
 
-  return Object.freeze({ unlock, setEnabled, dispose });
+  return Object.freeze({ unlock, preview, setEnabled, dispose });
 }

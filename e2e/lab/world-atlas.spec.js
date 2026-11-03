@@ -259,6 +259,62 @@ test('World atlas and item Finder are mutually exclusive at 390px width', async 
   await expect(searchbox).toHaveValue('Harmonic Calibration 01');
 });
 
+test('compact Notebook opening closes the Atlas without stealing focus', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 480 });
+  await loadAtlasFixture(page);
+  const { toggle, panel } = await openAtlas(page);
+  const notebookButton = page.getByRole('button', { name: 'Notebook', exact: true });
+
+  await notebookButton.click();
+
+  await expect(panel).toHaveCount(0);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('complementary', { name: "Professor's notebook" })).toBeVisible();
+  await expect(notebookButton).toBeFocused();
+});
+
+test('compact Atlas opening closes Inspector while preserving item selection', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 480 });
+  const fixture = await loadAtlasFixture(page);
+  const item = fixture.items.find((entry) => entry.id === 'calibration-card-01');
+  await page.getByRole('button', { name: 'Find an item' }).click();
+  await page.getByRole('searchbox', { name: 'Search laboratory items' }).fill(item.title);
+  await page.getByTestId(`item-finder-result-${item.id}`).click();
+
+  const inspector = page.getByRole('complementary', { name: 'Selected item details' });
+  await expect(inspector).toContainText(item.title);
+  const itemButton = page.getByTestId(`lab-item-${item.id}`);
+  await expect(itemButton).toHaveAttribute('aria-pressed', 'true');
+  const { toggle, panel } = await openAtlas(page);
+
+  await expect(panel).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(inspector).toBeHidden();
+  await expect(itemButton).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('desktop Atlas and Inspector coexist, then compact resize keeps Inspector and closes Atlas', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const fixture = await loadAtlasFixture(page);
+  const item = fixture.items.find((entry) => entry.id === 'calibration-card-01');
+  await page.getByRole('button', { name: 'Find an item' }).click();
+  await page.getByRole('searchbox', { name: 'Search laboratory items' }).fill(item.title);
+  await page.getByTestId(`item-finder-result-${item.id}`).click();
+
+  const inspector = page.getByRole('complementary', { name: 'Selected item details' });
+  const { toggle, panel } = await openAtlas(page);
+  await expect(inspector).toBeVisible();
+  await expect(panel).toBeVisible();
+  await expect(page.getByRole('group', { name: /Laboratory map/ })).toBeFocused();
+
+  await page.setViewportSize({ width: 390, height: 480 });
+
+  await expect(inspector).toBeVisible();
+  await expect(panel).toHaveCount(0);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle).toBeFocused();
+});
+
 test('World atlas geometry fits and collapses at 390px and 320px widths', async ({ page }) => {
   for (const [index, width] of [390, 320].entries()) {
     await page.setViewportSize({ width, height: 480 });

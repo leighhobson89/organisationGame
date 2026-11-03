@@ -56,6 +56,19 @@ async function endTouches(client) {
   await dispatchTouch(client, 'touchEnd');
 }
 
+async function flushAnimationFrames(page, count = 2) {
+  await page.evaluate((frameCount) => new Promise((resolve) => {
+    const flushNextFrame = (remaining) => {
+      if (remaining === 0) {
+        resolve();
+        return;
+      }
+      requestAnimationFrame(() => flushNextFrame(remaining - 1));
+    };
+    flushNextFrame(frameCount);
+  }), count);
+}
+
 async function readSceneCamera(page) {
   return page.locator('.world-scene').evaluate((scene) => {
     const matrix = new DOMMatrixReadOnly(getComputedStyle(scene).transform);
@@ -173,6 +186,53 @@ test('one-finger touch drag pans empty world space without changing zoom', async
     expect(cameraAfter.panX).toBeCloseTo(cameraBefore.panX + 68, 1);
     expect(cameraAfter.panY).toBeCloseTo(cameraBefore.panY + 42, 1);
     expect(cameraAfter.scale).toBe(cameraBefore.scale);
+  });
+});
+
+test('a coarse-pointer tap selects an object without moving or filing it', async ({ browser }) => {
+  await withTouchLab(browser, { dragItem: true }, async ({ page, state }) => {
+    const originalItem = state.items.find((item) => item.id === calibrationItemId);
+    const item = page.getByTestId(`lab-item-${calibrationItemId}`);
+    await expect(item).toBeVisible();
+    const itemBounds = await item.boundingBox();
+    expect(itemBounds).not.toBeNull();
+    const cameraBefore = await readSceneCamera(page);
+
+    await page.touchscreen.tap(
+      itemBounds.x + itemBounds.width / 2,
+      itemBounds.y + itemBounds.height / 2,
+    );
+
+    const inspector = page.getByTestId('item-inspector');
+    await expect(inspector).toBeVisible();
+    await expect(inspector).toContainText(originalItem.title);
+    expectCameraClose(await readSceneCamera(page), cameraBefore);
+
+    const savedState = decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey));
+    const savedItem = savedState.items.find((entry) => entry.id === calibrationItemId);
+    expect(savedItem.position).toEqual(originalItem.position);
+    expect(savedItem.placement).toEqual(originalItem.placement);
+    expect(savedItem.validation).toEqual(originalItem.validation);
+  });
+});
+
+test('resizing during a touch pan cancels it and ignores later movement from that touch', async ({ browser }) => {
+  await withTouchLab(browser, {}, async ({ page, client, state }) => {
+    const start = await findEmptyTouchPoint(page);
+    const cameraBefore = await readSceneCamera(page);
+    expectCameraClose(cameraBefore, state.camera);
+
+    await dispatchTouch(client, 'touchStart', [{ id: 1, ...start }]);
+    await dispatchTouch(client, 'touchMove', [{ id: 1, x: start.x + 54, y: start.y + 32 }]);
+    await expect.poll(async () => (await readSceneCamera(page)).panX).not.toBe(cameraBefore.panX);
+
+    await page.setViewportSize({ width: 844, height: 390 });
+    await expect.poll(() => readSceneCamera(page)).toEqual(cameraBefore);
+
+    await dispatchTouch(client, 'touchMove', [{ id: 1, x: start.x + 132, y: start.y + 88 }]);
+    await flushAnimationFrames(page);
+    expectCameraClose(await readSceneCamera(page), cameraBefore);
+    await endTouches(client);
   });
 });
 

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { containModalTabFocus } from './modalFocus.js';
 
 function useReducedMotionPreference(userReducedMotion) {
   const [osReducedMotion, setOsReducedMotion] = useState(() => (
@@ -30,25 +31,12 @@ export function CompletionSequence({ stats, onContinue, userReducedMotion = fals
   useEffect(() => {
     const previousFocus = document.activeElement;
     const dialog = headingRef.current?.closest('[role="dialog"]');
-    const focusables = () => [...(dialog?.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])') ?? [])];
     const focusFrame = window.requestAnimationFrame(() => headingRef.current?.focus());
     const onKeyDown = (event) => {
-      if (event.key !== 'Tab') return;
-      const elements = focusables();
-      if (elements.length === 0) {
-        event.preventDefault();
-        headingRef.current?.focus();
-        return;
-      }
-      const first = elements[0];
-      const last = elements[elements.length - 1];
-      if (event.shiftKey && (document.activeElement === first || document.activeElement === headingRef.current)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
+      containModalTabFocus(event, dialog, {
+        focusFallback: headingRef.current,
+        initialFocus: headingRef.current,
+      });
     };
     window.addEventListener('keydown', onKeyDown);
     return () => {

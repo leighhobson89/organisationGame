@@ -1,17 +1,16 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { containModalTabFocus } from './modalFocus.js';
 
-export function SettingsDialog({ preferences, saveStatus, onChange, onClose }) {
+export function SettingsDialog({ preferences, saveStatus, onChange, onPreviewSound, onClose }) {
   const dialogRef = useRef(null);
   const onCloseRef = useRef(onClose);
+  const [previewStatus, setPreviewStatus] = useState('');
 
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
   useEffect(() => {
     const previousFocus = document.activeElement;
     const dialog = dialogRef.current;
-    const focusables = () => [...(dialog?.querySelectorAll(
-      'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
-    ) ?? [])];
     const firstControl = dialog?.querySelector('select, input, button');
     firstControl?.focus();
 
@@ -21,24 +20,7 @@ export function SettingsDialog({ preferences, saveStatus, onChange, onClose }) {
         onCloseRef.current();
         return;
       }
-      if (event.key !== 'Tab') return;
-
-      const elements = focusables();
-      if (elements.length === 0) {
-        event.preventDefault();
-        dialog?.focus();
-        return;
-      }
-
-      const first = elements[0];
-      const last = elements[elements.length - 1];
-      if (event.shiftKey && (document.activeElement === first || !dialog?.contains(document.activeElement))) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (document.activeElement === last || !dialog?.contains(document.activeElement))) {
-        event.preventDefault();
-        first.focus();
-      }
+      containModalTabFocus(event, dialog);
     };
 
     window.addEventListener('keydown', onKeyDown);
@@ -47,6 +29,16 @@ export function SettingsDialog({ preferences, saveStatus, onChange, onClose }) {
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, []);
+
+  const handlePreviewSound = async (event) => {
+    if (!preferences.soundEffectsEnabled) return;
+    try {
+      const didPlay = await onPreviewSound?.(event.nativeEvent);
+      setPreviewStatus(didPlay ? 'Preview played' : 'Preview could not be played');
+    } catch {
+      setPreviewStatus('Preview could not be played');
+    }
+  };
 
   return (
     <div
@@ -106,10 +98,31 @@ export function SettingsDialog({ preferences, saveStatus, onChange, onClose }) {
                 id="settings-sound-effects"
                 type="checkbox"
                 checked={preferences.soundEffectsEnabled}
-                onChange={(event) => onChange({ soundEffectsEnabled: event.target.checked }, event.nativeEvent)}
+                onChange={(event) => {
+                  setPreviewStatus('');
+                  onChange({ soundEffectsEnabled: event.target.checked }, event.nativeEvent);
+                }}
               />
               Sound effects
             </label>
+          </div>
+
+          <div className="settings-dialog__preview">
+            <p id="settings-audio-preview-description" className="settings-dialog__description">
+              Short synthesized cues play for actions and discoveries.
+            </p>
+            <button
+              type="button"
+              className="settings-dialog__preview-button"
+              aria-describedby="settings-audio-preview-description"
+              disabled={!preferences.soundEffectsEnabled}
+              onClick={handlePreviewSound}
+            >
+              Preview sound
+            </button>
+            <p className="settings-dialog__preview-status" role="status" aria-live="polite" aria-label="Audio preview status" data-testid="audio-preview-status">
+              {previewStatus}
+            </p>
           </div>
         </div>
 

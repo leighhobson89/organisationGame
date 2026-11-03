@@ -17,6 +17,76 @@ async function openSaveDialog(page) {
   await expect(page.getByRole('dialog', { name: /save & restore/i })).toBeVisible();
 }
 
+test('Save & Restore recovers Tab focus when focus moves outside the dialog', async ({ page }) => {
+  await page.goto('/');
+  await openSaveDialog(page);
+
+  const dialog = page.getByRole('dialog', { name: /save & restore/i });
+  const focusableControls = dialog.locator('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled])');
+  const outsideControl = page.getByTestId('open-settings');
+
+  await outsideControl.focus();
+  await page.keyboard.press('Tab');
+  await expect(focusableControls.first()).toBeFocused();
+
+  await outsideControl.focus();
+  await page.keyboard.press('Shift+Tab');
+  await expect(focusableControls.last()).toBeFocused();
+});
+
+test('Save & Restore transfers focus into confirmations and returns it to the slot action', async ({ page }) => {
+  const savedSlot = JSON.stringify({
+    version: 1,
+    slotId: 2,
+    savedAt: '2026-11-03T12:00:00.000Z',
+    encodedSave: encodeSave(createNewGameState()),
+  });
+  await page.addInitScript(({ key, value }) => window.localStorage.setItem(key, value), {
+    key: slotTwoKey,
+    value: savedSlot,
+  });
+  await page.goto('/');
+  await waitForAutosave(page);
+  await openSaveDialog(page);
+
+  const slot = page.getByRole('region', { name: 'Slot 2' });
+  const restore = slot.getByRole('button', { name: 'Restore Slot 2', exact: true });
+  await restore.click();
+  const confirmRestore = slot.getByRole('button', { name: 'Confirm restore to Slot 2', exact: true });
+  await expect(confirmRestore).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(restore).toBeFocused();
+
+  await restore.click();
+  await expect(confirmRestore).toBeFocused();
+  await confirmRestore.click();
+  await expect(restore).toBeFocused();
+
+  const overwrite = slot.getByRole('button', { name: 'Overwrite Slot 2', exact: true });
+  await overwrite.click();
+  const confirmOverwrite = slot.getByRole('button', { name: 'Confirm overwrite Slot 2', exact: true });
+  await expect(confirmOverwrite).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(overwrite).toBeFocused();
+
+  await overwrite.click();
+  await expect(confirmOverwrite).toBeFocused();
+  await confirmOverwrite.click();
+  await expect(overwrite).toBeFocused();
+
+  const deleteAction = slot.getByRole('button', { name: 'Delete Slot 2', exact: true });
+  await deleteAction.click();
+  const confirmDelete = slot.getByRole('button', { name: 'Confirm delete Slot 2', exact: true });
+  await expect(confirmDelete).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(deleteAction).toBeFocused();
+
+  await deleteAction.click();
+  await expect(confirmDelete).toBeFocused();
+  await confirmDelete.click();
+  await expect(slot.getByRole('button', { name: 'Save to Slot 2', exact: true })).toBeFocused();
+});
+
 test('a manual slot survives reload and restores with a pre-restore backup', async ({ page }) => {
   await page.addInitScript(({ key, value }) => window.localStorage.setItem(key, value), {
     key: PREFERENCES_STORAGE_KEY,

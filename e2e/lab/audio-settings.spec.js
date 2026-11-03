@@ -1,9 +1,64 @@
 import { expect, test } from '@playwright/test';
 import { PREFERENCES_STORAGE_KEY } from '../../src/game/preferences/preferences.js';
 
+const autoSaveKey = 'palimpsest-laboratory.autosave.v1';
+
 async function openSettings(page) {
   await page.getByTestId('open-settings').click();
   return page.getByRole('dialog', { name: 'Settings' });
+}
+
+async function installAudioHarness(page, { soundEffectsEnabled = false, unsupported = false } = {}) {
+  await page.addInitScript(({ key, value, unsupportedAudio }) => {
+    window.localStorage.setItem(key, value);
+    window.__previewOscillatorStarts = 0;
+    window.__previewOscillatorStops = 0;
+    window.__previewAudioContextConstructions = 0;
+    window.__previewAudioContextResumes = 0;
+
+    if (unsupportedAudio) {
+      window.AudioContext = undefined;
+      window.webkitAudioContext = undefined;
+      return;
+    }
+
+    const createParam = () => ({
+      value: 0,
+      setValueAtTime(nextValue) { this.value = nextValue; },
+      linearRampToValueAtTime(nextValue) { this.value = nextValue; },
+    });
+
+    window.AudioContext = class FakePreviewAudioContext {
+      constructor() {
+        window.__previewAudioContextConstructions += 1;
+        this.currentTime = 0;
+        this.destination = {};
+        this.state = 'suspended';
+      }
+
+      async resume() {
+        this.state = 'running';
+        window.__previewAudioContextResumes += 1;
+      }
+      async close() { this.state = 'closed'; }
+      createOscillator() {
+        return {
+          frequency: createParam(),
+          connect() {},
+          disconnect() {},
+          start() { window.__previewOscillatorStarts += 1; },
+          stop() { window.__previewOscillatorStops += 1; },
+        };
+      }
+      createGain() {
+        return { gain: createParam(), connect() {}, disconnect() {} };
+      }
+    };
+  }, {
+    key: PREFERENCES_STORAGE_KEY,
+    value: JSON.stringify({ version: 1, textScale: 1, reduceMotion: false, soundEffectsEnabled }),
+    unsupportedAudio: unsupported,
+  });
 }
 
 test('Sound effects can be enabled and disabled persistently without changing accessibility preferences', async ({ page }) => {
@@ -36,6 +91,53 @@ test('Sound effects can be enabled and disabled persistently without changing ac
   await page.reload();
   settings = await openSettings(page);
   await expect(settings.getByRole('checkbox', { name: 'Sound effects', exact: true })).not.toBeChecked();
+});
+
+test('Settings previews sound only after opt-in without changing gameplay or the game save', async ({ page }) => {
+  await installAudioHarness(page);
+  await page.goto('/');
+  await expect.poll(() => page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey)).toBeTruthy();
+  const savedGameBefore = await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey);
+  const skillProgressBefore = await page.getByTestId('skill-points').textContent();
+  const chapterProgressBefore = await page.getByTestId('chapter-progress').textContent();
+
+  const settings = await openSettings(page);
+  const soundEffects = settings.getByRole('checkbox', { name: 'Sound effects', exact: true });
+  const preview = settings.getByRole('button', { name: 'Preview sound', exact: true });
+  const previewStatus = settings.getByRole('status', { name: 'Audio preview status' });
+  await expect(soundEffects).not.toBeChecked();
+  await expect(preview).toBeDisabled();
+
+  await soundEffects.check();
+  await expect(preview).toBeEnabled();
+  await preview.click();
+  await expect(previewStatus).toHaveText('Preview played');
+  await expect.poll(() => page.evaluate(() => window.__previewOscillatorStarts)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.__previewAudioContextConstructions)).toBe(1);
+
+  const stopsBeforeMute = await page.evaluate(() => window.__previewOscillatorStops);
+  await soundEffects.uncheck();
+  await expect(preview).toBeDisabled();
+  await expect.poll(() => page.evaluate(() => window.__previewOscillatorStops)).toBeGreaterThan(stopsBeforeMute);
+  expect(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey)).toBe(savedGameBefore);
+  await expect(page.getByTestId('skill-points')).toHaveText(skillProgressBefore);
+  await expect(page.getByTestId('chapter-progress')).toHaveText(chapterProgressBefore);
+});
+
+test('Settings announces when a requested sound preview cannot be played', async ({ page }) => {
+  await installAudioHarness(page, { unsupported: true });
+  await page.goto('/');
+
+  const settings = await openSettings(page);
+  const soundEffects = settings.getByRole('checkbox', { name: 'Sound effects', exact: true });
+  const preview = settings.getByRole('button', { name: 'Preview sound', exact: true });
+  await soundEffects.check();
+  await expect(preview).toBeEnabled();
+  await preview.click();
+
+  await expect(settings.getByRole('status', { name: 'Audio preview status' })).toHaveText('Preview could not be played');
+  expect(await page.evaluate(() => window.__previewAudioContextConstructions)).toBe(0);
+  expect(await page.evaluate(() => window.__previewOscillatorStarts)).toBe(0);
 });
 
 test('a gameplay event produces Web Audio activity after a user gesture when effects are enabled', async ({ page }) => {
@@ -140,4 +242,37 @@ test('a gameplay event produces Web Audio activity after a user gesture when eff
   await page.getByTestId('move-item').click();
   await expect(page.getByTestId('destination-cabinet-calibration')).toHaveAttribute('aria-label', /2 of 8 objects placed/i);
   expect(await page.evaluate(() => window.__audioOscillatorStarts)).toBe(startsBeforeMute, 'muted placement events produce no additional Web Audio activity');
+});
+
+test('a trusted keyboard gesture unlocks Web Audio before keyboard filing', async ({ page }) => {
+  await installAudioHarness(page, { soundEffectsEnabled: true });
+  await page.goto('/');
+
+  expect(await page.evaluate(() => window.__previewAudioContextConstructions)).toBe(0);
+  expect(await page.evaluate(() => window.__previewAudioContextResumes)).toBe(0);
+  expect(await page.evaluate(() => window.__previewOscillatorStarts)).toBe(0);
+
+  const calibrationCard = page.getByTestId('lab-item-calibration-card-01');
+  await calibrationCard.focus();
+  await expect(calibrationCard).toBeFocused();
+  await page.keyboard.press('Enter');
+
+  await expect(page.getByTestId('item-inspector')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__previewAudioContextConstructions)).toBe(1);
+  await expect.poll(() => page.evaluate(() => window.__previewAudioContextResumes)).toBe(1);
+  expect(await page.evaluate(() => window.__previewOscillatorStarts)).toBe(0, 'selecting a card does not play a placement cue');
+
+  const moveTarget = page.getByTestId('move-target');
+  await moveTarget.focus();
+  for (let step = 0; step < 3; step += 1) await page.keyboard.press('ArrowDown');
+  await expect(moveTarget).toHaveValue('cabinet-calibration');
+
+  const moveItem = page.getByTestId('move-item');
+  await moveItem.focus();
+  await page.keyboard.press('Enter');
+
+  await expect(page.getByTestId('destination-cabinet-calibration')).toHaveAttribute('aria-label', /1 of 8 objects placed/i);
+  await expect.poll(() => page.evaluate(() => window.__previewOscillatorStarts)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.__previewAudioContextConstructions)).toBe(1);
+  expect(await page.evaluate(() => window.__previewAudioContextResumes)).toBe(1);
 });

@@ -1,5 +1,6 @@
 import { COLLECTIONS, DESTINATIONS, getScratchPadsForOwnedSkills, PUZZLES, SCRATCH_PADS, SKILLS, WORLD_BOUNDS } from '../content/catalog.js';
 import { generateLab, generateLegacyLab } from '../content/generateLab.js';
+import { isCollectionComplete } from '../domain/completion.js';
 import { validateDrop } from '../domain/placement.js';
 import { allocateTargetPlacement, getTargetSlotPosition } from '../world/placementLayout.js';
 
@@ -35,16 +36,6 @@ const skillIds = new Set(SKILLS.map((entry) => entry.id));
 const legacyCollectionIds = new Set(['harmonic-calibration']);
 const legacyPuzzleIds = new Set(['pulse-sequence']);
 const legacySkillIds = new Set(['resonance-lens']);
-
-function collectionIsActuallyComplete(collection, items) {
-  return (collection.itemIds ?? []).length > 0 && collection.itemIds.every((id) => {
-    const item = items.find((entry) => entry.id === id);
-    const placement = item?.placement;
-    return item?.validation === 'correct'
-      && placement?.kind === 'destination'
-      && (placement.destinationId ?? placement.id) === collection.destinationId;
-  });
-}
 
 function isPlainObject(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -338,9 +329,12 @@ export function createDefaultProgress() {
 
 export function createStartingCamera() {
   const scale = 0.5;
-  const focus = { x: 1360, y: 650 };
   const viewportWidth = typeof window === 'undefined' ? 1280 : window.innerWidth;
   const viewportHeight = typeof window === 'undefined' ? 800 : window.innerHeight - 68;
+  const focus = {
+    x: viewportWidth <= 480 ? 944 : viewportWidth <= 720 ? 1106 : 1360,
+    y: Math.min(650, viewportHeight + 130),
+  };
   return {
     panX: viewportWidth / 2 + 70 - focus.x * scale,
     panY: viewportHeight / 2 - focus.y * scale,
@@ -425,10 +419,10 @@ export function normalizeGameStateWithMigration(state) {
   if (state.version === CURRENT_GAME_STATE_VERSION) {
     const chapterCollections = COLLECTIONS.filter((collection) => collection.chapter === 2);
     for (const collection of chapterCollections) {
-      const filed = collectionIsActuallyComplete(collection, items);
+      const filed = isCollectionComplete(collection, items);
       const recorded = progress.completedCollectionIds.includes(collection.id);
-      if (filed !== recorded) {
-        throw new TypeError(`Saved progress for ${collection.id} does not match its filed objects.`);
+      if (filed && !recorded) {
+        throw new TypeError(`Saved progress for ${collection.id} is missing its earned completion marker.`);
       }
     }
 
@@ -436,9 +430,7 @@ export function normalizeGameStateWithMigration(state) {
     if (chronologyPuzzle) {
       const prerequisitesMet = chronologyPuzzle.requiresCompletedCollectionIds.every((id) => {
         const collection = chapterCollections.find((entry) => entry.id === id);
-        return collection
-          && progress.completedCollectionIds.includes(id)
-          && collectionIsActuallyComplete(collection, items);
+        return collection && progress.completedCollectionIds.includes(id);
       });
       const unlocked = progress.unlockedPuzzleIds.includes(chronologyPuzzle.id);
       const solved = progress.solvedPuzzleIds.includes(chronologyPuzzle.id);

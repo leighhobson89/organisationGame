@@ -1,4 +1,5 @@
 import React from 'react';
+import { isCollectionComplete } from '../game/domain/completion.js';
 
 function collectionStatus(collection, items, progress) {
   const itemIds = collection.itemIds ?? [];
@@ -8,8 +9,9 @@ function collectionStatus(collection, items, progress) {
       && item.placement?.kind === 'destination'
       && (item.placement.destinationId ?? item.placement.id) === collection.destinationId;
   }).length;
-  const completed = (progress.completedCollectionIds ?? []).includes(collection.id);
-  return { placed, total: itemIds.length, completed };
+  const rewardEarned = (progress.completedCollectionIds ?? []).includes(collection.id);
+  const completed = isCollectionComplete(collection, items);
+  return { placed, total: itemIds.length, completed, rewardEarned };
 }
 
 export function NotebookPanel({ collections, items, progress, discoveries = [], discoveryEntries = [], onFocusCollection }) {
@@ -37,17 +39,28 @@ export function NotebookPanel({ collections, items, progress, discoveries = [], 
       <section className="notebook-section">
         <div className="section-heading">
           <h3>Collections</h3>
-          <span>{(progress.completedCollectionIds ?? []).length} restored</span>
+          <span>{collections.filter((collection) => isCollectionComplete(collection, items)).length} restored</span>
         </div>
         <ul className="collection-list">
           {collections.map((collection) => {
             const status = collectionStatus(collection, items, progress);
             const label = collection.label ?? collection.name ?? collection.id;
+            const accessibleStatus = status.completed
+              ? 'Complete.'
+              : status.rewardEarned
+                ? 'Reward earned; refiling needed.'
+                : 'Focus its destination.';
             return (
               <li key={collection.id}>
-                <button type="button" className={`collection-entry${status.completed ? ' is-complete' : ''}`} data-testid={`collection-${collection.id}`} onClick={() => onFocusCollection(collection)} aria-label={`${label}: ${status.placed} of ${status.total} correctly placed. ${status.completed ? 'Complete.' : 'Focus its destination.'}`}>
+                <button type="button" className={`collection-entry${status.completed ? ' is-complete' : ''}`} data-testid={`collection-${collection.id}`} onClick={() => onFocusCollection(collection)} aria-label={`${label}: ${status.placed} of ${status.total} correctly placed. ${accessibleStatus}`}>
                   <span className="collection-glyph" aria-hidden="true">{status.completed ? '✓' : '⌑'}</span>
-                  <span className="collection-copy"><strong>{label}</strong><small>{status.placed} / {status.total} filed</small></span>
+                  <span className="collection-copy">
+                    <strong>{label}</strong>
+                    <small>{status.placed} / {status.total} filed</small>
+                    {status.rewardEarned && !status.completed && (
+                      <small className="collection-reward-status">Reward earned; refiling needed.</small>
+                    )}
+                  </span>
                   <span className="collection-meter" aria-hidden="true"><span style={{ width: `${status.total ? (status.placed / status.total) * 100 : 0}%` }} /></span>
                 </button>
               </li>

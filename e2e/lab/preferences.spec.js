@@ -133,6 +133,24 @@ test('settings persist the selected text size separately from game saves and res
   expect(JSON.stringify(savedGame)).not.toMatch(/textScale|reduceMotion|soundEffectsEnabled/);
 });
 
+test('Settings recovers Tab focus when focus moves outside the dialog', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  const firstControl = settings.getByRole('button', { name: /close settings/i });
+  const lastControl = settings.getByRole('button', { name: 'Done', exact: true });
+  const outsideControl = page.getByTestId('open-saves');
+
+  await outsideControl.focus();
+  await page.keyboard.press('Tab');
+  await expect(firstControl).toBeFocused();
+
+  await outsideControl.focus();
+  await page.keyboard.press('Shift+Tab');
+  await expect(lastControl).toBeFocused();
+});
+
 test('Settings controls and the close action stay usable at 390×480 with 125% text', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 480 });
   await page.goto('/');

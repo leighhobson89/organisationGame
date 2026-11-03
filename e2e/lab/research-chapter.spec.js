@@ -175,6 +175,25 @@ test('jumping to the Palimpsest Engine fits it inside a narrow viewport', async 
   expect(Math.abs((engineBox.y + engineBox.height / 2) - (viewportBox.y + viewportBox.height / 2))).toBeLessThanOrEqual(1);
 });
 
+test('jumping to the Blueprint Cabinet keeps its full card inside a narrow viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 480 });
+  await page.goto('/');
+
+  await page.getByTestId('world-jump').selectOption('destination:cabinet-blueprints');
+
+  const viewport = page.getByTestId('world-viewport');
+  const cabinet = page.getByTestId('destination-cabinet-blueprints');
+  await expect(cabinet).toBeVisible();
+  const viewportBox = await viewport.boundingBox();
+  const cabinetBox = await cabinet.boundingBox();
+  expect(viewportBox).not.toBeNull();
+  expect(cabinetBox).not.toBeNull();
+  expect(cabinetBox.x).toBeGreaterThanOrEqual(viewportBox.x - 1);
+  expect(cabinetBox.x + cabinetBox.width).toBeLessThanOrEqual(viewportBox.x + viewportBox.width + 1);
+  expect(cabinetBox.y).toBeGreaterThanOrEqual(viewportBox.y - 1);
+  expect(cabinetBox.y + cabinetBox.height).toBeLessThanOrEqual(viewportBox.y + viewportBox.height + 1);
+});
+
 test('the Chronology Wheel stage presents its crystal assembly with reduced motion', async ({ page }) => {
   await page.setViewportSize(testViewport);
   const chronologyState = createNewGameState();
@@ -335,6 +354,75 @@ test('v2 migration preserves the old placement and the chapter gate, compass, an
 
   await page.getByTestId('toggle-notebook').click();
   await expect(page.getByTestId('notebook-panel')).toContainText('The Last Bell');
+
+  const earnedCollection = chapterCollections[0];
+  const withdrawnItemId = earnedCollection.itemIds[0];
+  const cameraBeforeFocus = decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey)).camera;
+  await focusDestination(page, earnedCollection.destinationId);
+  await expect.poll(async () => decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey)).camera)
+    .not.toEqual(cameraBeforeFocus);
+  const autosaveBeforeWithdrawal = await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey);
+
+  await page.getByTestId(`lab-item-${withdrawnItemId}`).click();
+  await page.getByTestId('move-target').selectOption('workspace');
+  await page.getByTestId('move-item').click();
+
+  const expectCurrentChapterStatus = async () => {
+    await expect(page.getByTestId('chapter-progress')).toHaveText('Research collections: 2 of 3');
+    await expect(page.getByTestId('skill-points'))
+      .toHaveText(`3 collection rewards · Skill points: ${solvedSave.progress.skillPoints}`);
+    await expect(page.getByTestId('invention-stage')).toContainText('Chronology Wheel');
+    await expect(page.getByTestId('open-puzzle')).toContainText(/Chronology.*solved/i);
+
+    await focusDestination(page, earnedCollection.destinationId);
+    await expect(page.getByTestId(`destination-${earnedCollection.destinationId}`).locator('.destination-complete'))
+      .toHaveCount(0);
+    const notebookToggle = page.getByTestId('toggle-notebook');
+    if (await notebookToggle.getAttribute('aria-pressed') !== 'true') await notebookToggle.click();
+    const notebook = page.getByTestId('notebook-panel');
+    const collectionRow = notebook.getByTestId(`collection-${earnedCollection.id}`);
+    await expect(collectionRow).toContainText('7 / 8 filed');
+    await expect(collectionRow).toContainText('Reward earned; refiling needed.');
+    await expect(collectionRow).not.toHaveClass(/is-complete/);
+    await expect(collectionRow).toHaveAccessibleName(/7 of 8 correctly placed\. Reward earned; refiling needed\./i);
+    await expect(notebook.locator('.notebook-section').first().locator('.section-heading span')).toHaveText('2 restored');
+  };
+
+  await expectCurrentChapterStatus();
+  await expect.poll(async () => {
+    const raw = await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey);
+    try {
+      return decodeSave(raw).items.find((item) => item.id === withdrawnItemId).placement.kind;
+    } catch {
+      return 'unreadable';
+    }
+  }).toBe('workspace');
+  await expect(page.getByTestId('autosave-status')).toHaveText('Saved just now');
+
+  const withdrawnSave = decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey));
+  expect(withdrawnSave.progress.completedCollectionIds).toEqual(solvedSave.progress.completedCollectionIds);
+  expect(withdrawnSave.progress.skillPoints).toBe(solvedSave.progress.skillPoints);
+  expect(withdrawnSave.progress.unlockedPuzzleIds).toContain(chronologyPuzzle.id);
+  expect(withdrawnSave.progress.solvedPuzzleIds).toContain(chronologyPuzzle.id);
+  expect(withdrawnSave.items.find((item) => item.id === withdrawnItemId)).toMatchObject({
+    validation: 'unchecked',
+    placement: { kind: 'workspace' },
+  });
+
+  await page.reload();
+  await expect(page.getByTestId('recovery-notice')).toHaveCount(0);
+  await expect(page.getByTestId('autosave-status')).toHaveText('Saved just now');
+  const reloadedWithdrawal = decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey));
+  expect(reloadedWithdrawal.items.find((item) => item.id === withdrawnItemId)).toMatchObject({
+    validation: 'unchecked',
+    placement: { kind: 'workspace' },
+  });
+  expect(reloadedWithdrawal.progress).toEqual(withdrawnSave.progress);
+  expect(reloadedWithdrawal.inventionStage).toBe('Chronology Wheel');
+  await expectCurrentChapterStatus();
+  await page.getByTestId('open-puzzle').click();
+  await expect(page.getByTestId('chronology-puzzle-panel')).toBeVisible();
+  expect(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey)).not.toBe(autosaveBeforeWithdrawal);
 });
 
 test('a rejected chronology-gate import leaves the live export, autosave, and backup unchanged', async ({ page }) => {

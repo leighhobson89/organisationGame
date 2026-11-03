@@ -6,7 +6,7 @@ function destinationIdOf(item) {
   return item?.placement?.destinationId ?? item?.placement?.id;
 }
 
-function isCorrectlyFiled(item) {
+export function isCorrectlyFiled(item) {
   const correctDestinationId = item?.correctDestinationId;
   return typeof correctDestinationId === 'string'
     && correctDestinationId.length > 0
@@ -15,7 +15,7 @@ function isCorrectlyFiled(item) {
     && destinationIdOf(item) === correctDestinationId;
 }
 
-function isCollectionComplete(collection, items) {
+export function isCollectionComplete(collection, items) {
   const itemIds = asArray(collection?.itemIds);
   if (itemIds.length === 0
     || typeof collection?.destinationId !== 'string') return false;

@@ -138,6 +138,72 @@ test('each current gameplay event maps to a bounded quiet Web Audio cue', async 
     && cue.stoppedAt - cue.startedAt <= 1.2), 'every oscillator has a bounded stop time');
 });
 
+test('an enabled Settings preview unlocks and plays without publishing a gameplay event', async (t) => {
+  const AudioContext = createFakeAudioContextClass();
+  const adapter = createWebAudioAdapter({ AudioContext, enabled: true, minIntervalMs: 0 });
+  const receivedEvents = [];
+  const removeObserver = subscribeGameAudioEvents((event) => receivedEvents.push(event.type));
+  t.after(async () => {
+    removeObserver();
+    await adapter.dispose();
+  });
+
+  assert.equal(GAME_AUDIO_EVENT_TYPES.includes('settings.preview'), false);
+  assert.equal(await adapter.preview(), true);
+  assert.equal(AudioContext.instances.length, 1, 'preview unlocks through the adapter');
+  assert.ok(startedOscillators(AudioContext).length > 0, 'preview schedules a short synthesized motif');
+  assert.deepEqual(receivedEvents, [], 'preview does not publish a fake gameplay event');
+});
+
+test('muted or unsupported Settings preview is unavailable without scheduling audio', async (t) => {
+  const mutedAudioContext = createFakeAudioContextClass();
+  const muted = createWebAudioAdapter({ AudioContext: mutedAudioContext, enabled: false });
+  const unsupported = createWebAudioAdapter({ AudioContext: null, enabled: true });
+  t.after(async () => {
+    await muted.dispose();
+    await unsupported.dispose();
+  });
+
+  assert.equal(await muted.preview(), false);
+  assert.equal(mutedAudioContext.instances.length, 0, 'a muted preview does not construct an AudioContext');
+  assert.equal(await unsupported.preview(), false, 'missing Web Audio is reported as unavailable');
+});
+
+test('disabling sound effects immediately stops an active Settings preview', async (t) => {
+  const AudioContext = createFakeAudioContextClass();
+  const adapter = createWebAudioAdapter({ AudioContext, enabled: true, minIntervalMs: 0 });
+  t.after(() => adapter.dispose());
+
+  assert.equal(await adapter.preview(), true);
+  const voices = startedOscillators(AudioContext);
+  assert.ok(voices.length > 0);
+  const stopCountBeforeMute = voices.reduce((sum, voice) => sum + voice.stopCalls.length, 0);
+
+  adapter.setEnabled(false);
+
+  const stopCountAfterMute = voices.reduce((sum, voice) => sum + voice.stopCalls.length, 0);
+  assert.ok(stopCountAfterMute > stopCountBeforeMute, 'muting stops every scheduled preview voice');
+});
+
+test('a rejected Settings preview unlock is non-fatal and can retry on a later gesture', async (t) => {
+  const receivedEvents = [];
+  const removeObserver = subscribeGameAudioEvents((event) => receivedEvents.push(event.type));
+  const AudioContext = createFakeAudioContextClass({ rejectedResumes: 1 });
+  const adapter = createWebAudioAdapter({ AudioContext, enabled: true, minIntervalMs: 0 });
+  t.after(async () => {
+    removeObserver();
+    await adapter.dispose();
+  });
+
+  assert.equal(await adapter.preview(), false);
+  assert.equal(startedOscillators(AudioContext).length, 0);
+  assert.deepEqual(receivedEvents, []);
+
+  assert.equal(await adapter.preview(), true);
+  assert.ok(startedOscillators(AudioContext).length > 0, 'a later trusted preview can recover playback');
+  assert.deepEqual(receivedEvents, []);
+});
+
 test('placement success and invalidity use distinguishable cues', async (t) => {
   let now = 1000;
   const AudioContext = createFakeAudioContextClass();

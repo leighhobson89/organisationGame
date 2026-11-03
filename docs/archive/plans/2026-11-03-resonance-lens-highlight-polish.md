@@ -1,8 +1,8 @@
 # Plan: Resonance Lens Highlight Polish
 
-**Status:** Active (2026-11-03). Architect plan recorded; focused regression
-tests and implementation are pending. Keep the independent human-playtest and
-content-expansion gate open.
+**Status:** Complete (2026-11-03). Implementation, focused verification, and
+review are complete. The independent human-playtest and content-expansion gate
+remains open and unchanged.
 
 ## Finding
 
@@ -79,17 +79,44 @@ non-automating nature of both tools, current content and persistence, the
 
 ## Test plan
 
-**Status:** Focused regression test authoring is pending.
+**Status:** Focused regression tests and implementation are complete.
 
-- Cover a Lens collection match and family fallback, excluding the selected
-  item, through user-visible activation and accessible status.
-- Cover the highlighted card cue and accessible source label in detail mode.
-- Force overview mode with a Canvas-only match and verify the Canvas actually
-  paints its cue, not only that the ID was passed as a prop. Also verify the
-  64-overlay cap is unchanged.
-- Verify the Compass candidate keeps its distinct cue and does not move, file,
-  or validate an item.
-- Verify reduced motion leaves a static, perceivable cue and match status.
-- Assert activation leaves item state and saved data unchanged. Run the
-  focused browser regressions and production build, then review the change.
-  Do not run the full test suite without user approval.
+### Unit regression
+
+File: `tests/unit/game-foundation/skill-highlights.test.mjs` (2 tests).
+
+```sh
+node --test --test-isolation=none tests/unit/game-foundation/skill-highlights.test.mjs
+```
+
+The unit tests verify collection matching, family fallback, selected-item
+exclusion, and input immutability. **Final result:** 2/2 passed.
+
+### Browser regression
+
+Files: `e2e/lab/resonance-lens-highlights.spec.js` (2 cases) and the
+Compass/chronology journey in `e2e/lab/research-chapter.spec.js`.
+
+```sh
+npm run test:e2e -- --workers=1 e2e/lab/resonance-lens-highlights.spec.js e2e/lab/research-chapter.spec.js --grep "Lens|v2 migration preserves"
+```
+
+The overview case seeds the deterministic 0.4-scale scene with the last
+Parallax Trials card rendered by Canvas rather than a DOM overlay. It verifies
+that the Canvas paints a rotation-aware marker, Canvas-only titles are exposed
+to screen readers, visible feedback names the focused item and match count,
+and activation leaves item state and the save unchanged. The detail case
+verifies the matching DOM card's visible marker and accessible **Highlighted
+by the Resonance Lens** source. The filtered research-chapter journey checks
+that Compass behavior and chronology progression remain intact. **Final
+result:** 3/3 browser cases passed. The recorded red baseline was 2/2 failed:
+overview status was missing and Canvas marker pixels did not change; detail
+accessible naming omitted the Lens highlight source.
+
+The unit and E2E coverage verify the collection-or-family match rule, selected
+item exclusion, the unchanged 64-overlay cap, Canvas-only accessible titles,
+the single Lens live announcement, and item/save immutability. Compass keeps
+its distinct source label and cue. Reduced motion keeps a static marker and
+status available. `npm run build` passed with Vite 8.3.5. Code review and
+re-review found no actionable findings. The full test suite was not run. The
+separate independent human-playtest/content-expansion gate remains open.

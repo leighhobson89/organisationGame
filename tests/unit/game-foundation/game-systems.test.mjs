@@ -450,6 +450,92 @@ function gameState(overrides = {}) {
   };
 }
 
+function fileChapterCollectionInState(items, collection) {
+  for (const itemId of collection.itemIds) {
+    const itemIndex = items.findIndex((item) => item.id === itemId);
+    const item = items[itemIndex];
+    const allocation = allocateTargetPlacement({
+      target: { kind: 'destination', id: collection.destinationId },
+      item,
+      items,
+      destinations: DESTINATIONS,
+      scratchPads: SCRATCH_PADS,
+    });
+    assert.equal(allocation.ok, true, `${itemId} should fit in ${collection.label}`);
+    items[itemIndex] = {
+      ...item,
+      previousWorkspacePosition: { ...item.position },
+      position: allocation.position,
+      placement: allocation.placement,
+      rotation: 0,
+      validation: 'correct',
+    };
+  }
+}
+
+test('v3 normalization preserves earned chapter markers and chronology unlock after an item returns to the workspace', () => {
+  const chapterCollections = COLLECTIONS.filter((collection) => collection.chapter === 2);
+  const chronology = PUZZLES.find((puzzle) => (puzzle.requiresCompletedCollectionIds ?? []).length > 0);
+  const items = structuredClone(generatedItems);
+  for (const collection of chapterCollections) fileChapterCollectionInState(items, collection);
+
+  const progress = {
+    skillPoints: chapterCollections.length,
+    completedCollectionIds: chapterCollections.map((collection) => collection.id),
+    unlockedPuzzleIds: [chronology.id],
+    solvedPuzzleIds: [chronology.id],
+    ownedSkills: [],
+  };
+  const state = gameState({ items, progress, inventionStage: 'Chronology Wheel' });
+  const earnedCollection = chapterCollections[0];
+  const withdrawnItem = state.items.find((item) => item.id === earnedCollection.itemIds[0]);
+  withdrawnItem.position = { ...withdrawnItem.previousWorkspacePosition };
+  withdrawnItem.placement = { kind: 'workspace' };
+  withdrawnItem.validation = 'unchecked';
+
+  const normalized = normalizeGameState(state);
+
+  assert.deepEqual(normalized.progress.completedCollectionIds, progress.completedCollectionIds,
+    'the historical reward marker remains earned after an object is moved out');
+  assert.deepEqual(normalized.progress.unlockedPuzzleIds, [chronology.id],
+    'the chronology unlock remains earned after its prerequisite collection is no longer complete');
+  assert.deepEqual(normalized.progress.solvedPuzzleIds, [chronology.id]);
+  assert.deepEqual(normalized.items.find((item) => item.id === withdrawnItem.id).placement, { kind: 'workspace' });
+});
+
+test('v3 normalization rejects a fully filed chapter collection without its earned marker', () => {
+  const collection = COLLECTIONS.find((entry) => entry.chapter === 2);
+  const items = structuredClone(generatedItems);
+  fileChapterCollectionInState(items, collection);
+
+  assert.throws(
+    () => normalizeGameState(gameState({ items })),
+    /saved progress|completed collection|earned marker/i,
+    'a collection that is currently filed must have its completion reward recorded',
+  );
+});
+
+test('v3 normalization rejects a chronology unlock without all earned prerequisite markers', () => {
+  const chapterCollections = COLLECTIONS.filter((collection) => collection.chapter === 2);
+  const chronology = PUZZLES.find((puzzle) => (puzzle.requiresCompletedCollectionIds ?? []).length > 0);
+  const items = structuredClone(generatedItems);
+  for (const collection of chapterCollections.slice(0, -1)) fileChapterCollectionInState(items, collection);
+  const earnedCollectionIds = chapterCollections.slice(0, -1).map((collection) => collection.id);
+  const progress = {
+    skillPoints: earnedCollectionIds.length,
+    completedCollectionIds: earnedCollectionIds,
+    unlockedPuzzleIds: [chronology.id],
+    solvedPuzzleIds: [],
+    ownedSkills: [],
+  };
+
+  assert.throws(
+    () => normalizeGameState(gameState({ items, progress })),
+    /chronology puzzle progress|collection prerequisites/i,
+    'the chronology puzzle must not unlock when one prerequisite marker was never earned',
+  );
+});
+
 function stateFromNormalization(result) {
   return result?.state && Array.isArray(result.state.items) ? result.state : result;
 }

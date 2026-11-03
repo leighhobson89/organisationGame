@@ -1,17 +1,16 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CHAPTER_COLLECTION_IDS, COLLECTIONS, DESTINATIONS, getScratchPadsForOwnedSkills, NOTEBOOK_DISCOVERIES, PUZZLES, SKILLS, WORLD_BOUNDS } from '../game/content/catalog.js';
 import { emitGameAudioEvent } from '../game/audio/audioEvents.js';
 import { createWebAudioAdapter } from '../game/audio/webAudioAdapter.js';
-import { getCompletionStats, isGameComplete } from '../game/domain/completion.js';
+import { getCompletionStats, isCollectionComplete, isCorrectlyFiled, isGameComplete } from '../game/domain/completion.js';
 import { completeCollection, findMissingCollectionMember } from '../game/domain/progression.js';
+import { getResonanceLensMatches } from '../game/domain/skillHighlights.js';
 import { validateDrop } from '../game/domain/placement.js';
-import { createNewGameState, DEFAULT_GAME_ITEM_IDS, getCanonicalItemRotation } from '../game/persistence/gameState.js';
-import { createAutosaveCoordinator } from '../game/persistence/autosaveCoordinator.js';
-import { AUTO_SAVE_KEY, BACKUP_SAVE_KEY, loadGameFromStorage } from '../game/persistence/loadGame.js';
+import { DEFAULT_GAME_ITEM_IDS, getCanonicalItemRotation } from '../game/persistence/gameState.js';
 import { loadPreferences, normalizePreferences, savePreferences } from '../game/preferences/preferences.js';
-import { encodeSave, importSave } from '../game/persistence/save.js';
 import { allocateBatchTargetPlacements, allocateTargetPlacement } from '../game/world/placementLayout.js';
 import { CompletionSequence } from '../ui/CompletionSequence.jsx';
+import { EMPTY_HIGHLIGHTED_ITEM_IDS } from '../ui/highlightedItemIds.js';
 import { ItemInspector } from '../ui/ItemInspector.jsx';
 import { NotebookPanel } from '../ui/NotebookPanel.jsx';
 import { PuzzlePanel } from '../ui/PuzzlePanel.jsx';
@@ -19,6 +18,7 @@ import { SaveDialog } from '../ui/SaveDialog.jsx';
 import { SettingsDialog } from '../ui/SettingsDialog.jsx';
 import { SkillsPanel } from '../ui/SkillsPanel.jsx';
 import { WorldViewport } from '../ui/WorldViewport.jsx';
+import { useGamePersistence } from './useGamePersistence.js';
 
 const RESONANCE_LENS_ID = 'resonance-lens';
 const RESONANCE_LENS = SKILLS.find((skill) => skill.id === RESONANCE_LENS_ID) ?? { cost: 1, durationMs: 7000 };
@@ -27,22 +27,12 @@ const AETHER_WAYFINDER_ID = 'aether-wayfinder';
 const AETHER_WAYFINDER = SKILLS.find((skill) => skill.id === AETHER_WAYFINDER_ID) ?? { cost: 2, durationMs: 7000 };
 const CHAPTER_COLLECTIONS = COLLECTIONS.filter((collection) => CHAPTER_COLLECTION_IDS.includes(collection.id));
 const MAX_BATCH_SELECTION = 40;
+const COMPACT_PANEL_QUERY = '(max-width: 720px)';
 
-function collectionIsComplete(collection, items) {
-  const itemIds = collection.itemIds ?? [];
-  return itemIds.length > 0 && itemIds.every((id) => {
-    const item = items.find((entry) => entry.id === id);
-    return item?.validation === 'correct'
-      && item.placement?.kind === 'destination'
-      && (item.placement.destinationId ?? item.placement.id) === collection.destinationId;
-  });
-}
-
-function isCorrectlyFiled(item) {
-  return Boolean(item
-    && item.validation === 'correct'
-    && item.placement?.kind === 'destination'
-    && (item.placement.destinationId ?? item.placement.id) === item.correctDestinationId);
+function isCompactViewport() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia(COMPACT_PANEL_QUERY).matches;
 }
 
 function keepPositionInsideWorld(position, item) {
@@ -68,19 +58,19 @@ function nextInventionStage(currentStage, rewardedStage) {
 }
 
 export default function App() {
-  const [initialLoad] = useState(() => {
-    try {
-      return loadGameFromStorage(window.localStorage, { createNewGame: createNewGameState });
-    } catch {
-      return {
-        state: createNewGameState(),
-        autosaveEnabled: true,
-        canEnableAutosave: false,
-        notice: 'Browser storage is unavailable. This laboratory can be played, but autosave may not work.',
-      };
-    }
-  });
-  const [game, setGame] = useState(initialLoad.state);
+  const {
+    game,
+    updateGame,
+    autosaveEnabled,
+    canStartFresh,
+    recoveryNotice,
+    saveStatus,
+    saveText,
+    openSaveDialog: prepareSaveText,
+    importGame,
+    startFresh,
+    dismissRecoveryNotice,
+  } = useGamePersistence();
   const [selectedItemId, setSelectedItemId] = useState(null);
   const [selectedItemIds, setSelectedItemIds] = useState([]);
   const [multiSelectionMode, setMultiSelectionMode] = useState(false);
@@ -91,51 +81,46 @@ export default function App() {
   const [keyboardFocusItemId, setKeyboardFocusItemId] = useState(null);
   const [activeLeftPanel, setActiveLeftPanel] = useState(null);
   const [activeRightPanel, setActiveRightPanel] = useState(null);
+  const [isCompact, setIsCompact] = useState(isCompactViewport);
   const [saveOpen, setSaveOpen] = useState(false);
-  const [autosaveEnabled, setAutosaveEnabled] = useState(initialLoad.autosaveEnabled);
-  const [canStartFresh, setCanStartFresh] = useState(initialLoad.canEnableAutosave ?? false);
-  const [recoveryNotice, setRecoveryNotice] = useState(initialLoad.notice);
-  const [saveStatus, setSaveStatus] = useState(initialLoad.autosaveEnabled ? 'Checking autosave…' : 'Recovery needed');
-  const [saveText, setSaveText] = useState('');
   const [toast, setToast] = useState('');
   const [lensActive, setLensActive] = useState(false);
   const [lensMessage, setLensMessage] = useState('');
   const [missingMemberId, setMissingMemberId] = useState(null);
+  const highlightedItemIds = useMemo(
+    () => missingMemberId ? [missingMemberId] : EMPTY_HIGHLIGHTED_ITEM_IDS,
+    [missingMemberId],
+  );
   const [guidedDestination, setGuidedDestination] = useState(null);
   const [activePuzzleId, setActivePuzzleId] = useState(null);
   const suppressCompletionAudioRef = useRef(false);
   const previousCompletionRef = useRef(isGameComplete({
-    items: initialLoad.state.items,
-    progress: initialLoad.state.progress,
+    items: game.items,
+    progress: game.progress,
     collections: COLLECTIONS,
     puzzles: PUZZLES,
     expectedItemIds: DEFAULT_GAME_ITEM_IDS,
   }));
   const worldRef = useRef(null);
-  const autosaveCoordinatorRef = useRef(null);
+  const [worldOverlayHost, setWorldOverlayHost] = useState(null);
+  const openPuzzleButtonRef = useRef(null);
   const documentPreferencesRef = useRef(null);
   const audioAdapterRef = useRef(null);
-  const updateGame = (nextGame) => {
-    autosaveCoordinatorRef.current?.invalidate();
-    setGame(nextGame);
-  };
   const selectedItem = game.items.find((item) => item.id === selectedItemId) ?? null;
   const progress = game.progress;
   const scratchPads = useMemo(() => getScratchPadsForOwnedSkills(progress.ownedSkills), [progress.ownedSkills]);
   const unlockedPuzzleIds = progress.unlockedPuzzleIds ?? [];
   const unlockedPuzzles = PUZZLES.filter((puzzle) => unlockedPuzzleIds.includes(puzzle.id)
-    && (puzzle.requiresCompletedCollectionIds ?? []).every((collectionId) => {
-      const collection = COLLECTIONS.find((entry) => entry.id === collectionId);
-      return collection && collectionIsComplete(collection, game.items)
-        && (progress.completedCollectionIds ?? []).includes(collectionId);
-    }));
+    && (puzzle.requiresCompletedCollectionIds ?? []).every((collectionId) => (
+      (progress.completedCollectionIds ?? []).includes(collectionId)
+    )));
   const solvedPuzzleIds = progress.solvedPuzzleIds ?? [];
   const activePuzzle = unlockedPuzzles.find((puzzle) => puzzle.id === activePuzzleId)
     ?? unlockedPuzzles.find((puzzle) => !solvedPuzzleIds.includes(puzzle.id))
     ?? unlockedPuzzles.at(-1)
     ?? null;
   const puzzleSolved = Boolean(activePuzzle && solvedPuzzleIds.includes(activePuzzle.id));
-  const chapterCompletedCount = CHAPTER_COLLECTIONS.filter((collection) => (progress.completedCollectionIds ?? []).includes(collection.id)).length;
+  const chapterCompletedCount = CHAPTER_COLLECTIONS.filter((collection) => isCollectionComplete(collection, game.items)).length;
   const compassCandidateId = useMemo(
     () => selectedItem ? findMissingCollectionMember(game.items, selectedItem.id) : null,
     [game.items, selectedItem?.id],
@@ -215,6 +200,29 @@ export default function App() {
   }, [gameComplete]);
 
   useEffect(() => {
+    const mediaQuery = window.matchMedia(COMPACT_PANEL_QUERY);
+    const updateCompactMode = (event) => setIsCompact(event.matches);
+    setIsCompact(mediaQuery.matches);
+    if (mediaQuery.addEventListener) mediaQuery.addEventListener('change', updateCompactMode);
+    else mediaQuery.addListener(updateCompactMode);
+    return () => {
+      if (mediaQuery.removeEventListener) mediaQuery.removeEventListener('change', updateCompactMode);
+      else mediaQuery.removeListener(updateCompactMode);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (isCompact && activeLeftPanel && activeRightPanel) setActiveLeftPanel(null);
+  }, [activeLeftPanel, activeRightPanel, isCompact]);
+
+  useLayoutEffect(() => {
+    if (isCompact && (activeLeftPanel || activeRightPanel)) {
+      worldRef.current?.closeAtlas({ restoreFocus: false, restoreFocusIfAtlasFocused: true });
+      worldRef.current?.closeFinder({ restoreFocus: false, restoreFocusIfFinderFocused: true });
+    }
+  }, [activeLeftPanel, activeRightPanel, isCompact]);
+
+  useEffect(() => {
     let adapter = null;
     try {
       adapter = createWebAudioAdapter({ enabled: preferences.soundEffectsEnabled });
@@ -231,42 +239,6 @@ export default function App() {
       }
     };
   }, []);
-
-  useEffect(() => {
-    let worker = null;
-    let storage = null;
-    try {
-      if (typeof Worker !== 'undefined') {
-        worker = new Worker(new URL('../game/persistence/autosaveEncoder.worker.js', import.meta.url), { type: 'module' });
-      }
-    } catch {
-      worker = null;
-    }
-    try { storage = window.localStorage; } catch { storage = null; }
-
-    const coordinator = createAutosaveCoordinator({
-      worker,
-      storage,
-      autoSaveKey: AUTO_SAVE_KEY,
-      onStatus: setSaveStatus,
-    });
-    autosaveCoordinatorRef.current = coordinator;
-    return () => {
-      coordinator.dispose();
-      if (autosaveCoordinatorRef.current === coordinator) autosaveCoordinatorRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    const coordinator = autosaveCoordinatorRef.current;
-    if (!coordinator) return;
-    if (!autosaveEnabled) {
-      coordinator.invalidate();
-      setSaveStatus('Recovery needed');
-      return;
-    }
-    coordinator.schedule(game);
-  }, [autosaveEnabled, game]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -353,7 +325,7 @@ export default function App() {
     const newlyCompletedCollections = [];
     const previouslyUnlockedPuzzleIds = new Set(nextProgress.unlockedPuzzleIds ?? []);
     for (const collection of COLLECTIONS) {
-      if (collectionIsComplete(collection, items) && !(nextProgress.completedCollectionIds ?? []).includes(collection.id)) {
+      if (isCollectionComplete(collection, items) && !(nextProgress.completedCollectionIds ?? []).includes(collection.id)) {
         nextProgress = completeCollection(nextProgress, collection);
         newlyCompleted = collection;
         newlyCompletedCollections.push(collection);
@@ -392,6 +364,7 @@ export default function App() {
     }
     setSelectedItemId(itemId);
     setActiveRightPanel(newlyUnlockedPuzzle ? 'puzzle' : 'inspector');
+    if (isCompact && !newlyCompleted) setActiveLeftPanel(null);
 
     if (validation.status === 'correct') {
       setToast('Filed correctly. The brass index clicks into place.');
@@ -406,17 +379,18 @@ export default function App() {
       if (newlyUnlockedPuzzle) {
         setActivePuzzleId(newlyUnlockedPuzzle.id);
         setActiveRightPanel('puzzle');
+        setActiveLeftPanel(isCompact ? null : 'notebook');
         setToast(`${newlyCompleted.label} restored. ${newlyUnlockedPuzzle.title} is now available.`);
       } else {
-        setActiveRightPanel('inspector');
+        setActiveRightPanel(isCompact ? null : 'inspector');
+        setActiveLeftPanel('notebook');
         if (isChapterCollection) {
-          const restoredChapterCollections = (nextProgress.completedCollectionIds ?? []).filter((id) => CHAPTER_COLLECTION_IDS.includes(id)).length;
+          const restoredChapterCollections = CHAPTER_COLLECTIONS.filter((collection) => isCollectionComplete(collection, items)).length;
           setToast(`${newlyCompleted.label} restored. ${restoredChapterCollections} of ${CHAPTER_COLLECTION_IDS.length} research collections restored.`);
         } else {
           setToast(`${newlyCompleted.label} restored. One insight point earned.`);
         }
       }
-      setActiveLeftPanel('notebook');
     }
     return movedItem;
   };
@@ -486,7 +460,7 @@ export default function App() {
     const newlyCompletedCollections = [];
     const previouslyUnlockedPuzzleIds = new Set(nextProgress.unlockedPuzzleIds ?? []);
     for (const collection of COLLECTIONS) {
-      if (collectionIsComplete(collection, items) && !(nextProgress.completedCollectionIds ?? []).includes(collection.id)) {
+      if (isCollectionComplete(collection, items) && !(nextProgress.completedCollectionIds ?? []).includes(collection.id)) {
         nextProgress = completeCollection(nextProgress, collection);
         newlyCompletedCollections.push(collection);
       }
@@ -554,14 +528,15 @@ export default function App() {
       const isChapterCollection = CHAPTER_COLLECTION_IDS.includes(lastCompleted.id);
       if (newlyUnlockedPuzzle) {
         setActivePuzzleId(newlyUnlockedPuzzle.id);
+        setActiveLeftPanel(isCompact ? null : 'notebook');
         setToast(`${lastCompleted.label} restored. ${newlyUnlockedPuzzle.title} is now available.`);
       } else if (isChapterCollection) {
-        const restoredChapterCollections = (nextProgress.completedCollectionIds ?? []).filter((id) => CHAPTER_COLLECTION_IDS.includes(id)).length;
+        const restoredChapterCollections = CHAPTER_COLLECTIONS.filter((collection) => isCollectionComplete(collection, items)).length;
         setToast(`${lastCompleted.label} restored. ${restoredChapterCollections} of ${CHAPTER_COLLECTION_IDS.length} research collections restored.`);
       } else {
         setToast(`${lastCompleted.label} restored. One insight point earned.`);
       }
-      setActiveLeftPanel('notebook');
+      if (!newlyUnlockedPuzzle) setActiveLeftPanel('notebook');
     }
 
     if (target.kind === 'destination') {
@@ -588,7 +563,7 @@ export default function App() {
       : selectedItemIds.length > 0 ? `${selectedItemIds.length} objects remain selected.` : 'Multiple selection closed.');
   };
 
-  const handleToggleItemSelection = (itemId) => {
+  const handleToggleItemSelection = useCallback((itemId) => {
     const isSelected = selectedItemIds.includes(itemId);
     if (!isSelected && selectedItemIds.length >= MAX_BATCH_SELECTION) {
       setToast(`The selection limit is ${MAX_BATCH_SELECTION} objects. Deselect an object before selecting another.`);
@@ -601,21 +576,22 @@ export default function App() {
     setSelectedItemId(isSelected ? (nextIds.at(-1) ?? null) : itemId);
     setActiveRightPanel(nextIds.length > 0 ? 'inspector' : null);
     setKeyboardFocusItemId(null);
-    setActiveLeftPanel((current) => current === 'skills' ? null : current);
+    setActiveLeftPanel((current) => (isCompact || current === 'skills') ? null : current);
     setToast(`${nextIds.length} ${nextIds.length === 1 ? 'object' : 'objects'} selected.`);
-  };
+  }, [isCompact, selectedItemIds]);
 
-  const handleSelectItem = (itemId, activation = {}) => {
+  const handleSelectItem = useCallback((itemId, activation = {}) => {
     setSelectedItemIds([]);
     setMultiSelectionMode(false);
     setSelectedItemId(itemId);
     setActiveRightPanel('inspector');
     setKeyboardFocusItemId(activation.keyboard ? itemId : null);
-    setActiveLeftPanel((current) => current === 'skills' ? null : current);
-  };
+    setActiveLeftPanel((current) => (isCompact || current === 'skills') ? null : current);
+  }, [isCompact]);
 
   const handleOpenFinder = () => {
-    setActiveLeftPanel((current) => current === 'skills' ? null : current);
+    setToast('');
+    setActiveLeftPanel((current) => (isCompact || current === 'skills') ? null : current);
     setActiveRightPanel(null);
   };
 
@@ -633,6 +609,7 @@ export default function App() {
     emitGameAudioEvent('skill.unlocked', { skillId });
     setToast(skill.purchaseConfirmation ?? `${skill.label} assembled. Choose a specimen to focus it.`);
     setActiveLeftPanel('skills');
+    if (isCompact) setActiveRightPanel(null);
   };
 
   const handleToggleSkill = (skillId) => {
@@ -643,8 +620,14 @@ export default function App() {
       }
       const active = !lensActive;
       setLensActive(active);
-      setLensMessage(active ? `Related items to ${selectedItem.title} are glimmering.` : 'The lens is idle.');
-      if (active) emitGameAudioEvent('skill.activated', { skillId });
+      if (active) {
+        const matchCount = getResonanceLensMatches(game.items, selectedItem).length;
+        const message = `The Resonance Lens reveals ${matchCount} items related to ${selectedItem.title}.`;
+        setToast(message);
+        emitGameAudioEvent('skill.activated', { skillId });
+      } else {
+        setLensMessage('The lens is idle.');
+      }
       return;
     }
 
@@ -703,12 +686,9 @@ export default function App() {
     const puzzle = PUZZLES.find((entry) => entry.id === puzzleId);
     if (!puzzle) return;
     const requirements = puzzle.requiresCompletedCollectionIds ?? [];
-    const prerequisitesMet = requirements.every((collectionId) => {
-      const collection = COLLECTIONS.find((entry) => entry.id === collectionId);
-      return collection
-        && collectionIsComplete(collection, game.items)
-        && (progress.completedCollectionIds ?? []).includes(collectionId);
-    });
+    const prerequisitesMet = requirements.every((collectionId) => (
+      (progress.completedCollectionIds ?? []).includes(collectionId)
+    ));
     if (!prerequisitesMet || !(progress.unlockedPuzzleIds ?? []).includes(puzzleId)) return;
     const rewardStage = puzzle.reward?.inventionStage;
     updateGame((current) => {
@@ -739,24 +719,17 @@ export default function App() {
   };
 
   const handleImportSave = (compressed) => {
-    const result = importSave(compressed, game);
-    if (!result.ok) return result;
-    const importedState = result.state;
-    try {
-      window.localStorage.setItem(BACKUP_SAVE_KEY, encodeSave(game));
-    } catch {
-      return { ok: false, state: game, error: 'The current laboratory could not be backed up, so the import was not applied.' };
-    }
-    const importedGameComplete = isGameComplete({
-      items: importedState.items,
-      progress: importedState.progress,
-      collections: COLLECTIONS,
-      puzzles: PUZZLES,
-      expectedItemIds: DEFAULT_GAME_ITEM_IDS,
+    const result = importGame(compressed, (importedState) => {
+      const importedGameComplete = isGameComplete({
+        items: importedState.items,
+        progress: importedState.progress,
+        collections: COLLECTIONS,
+        puzzles: PUZZLES,
+        expectedItemIds: DEFAULT_GAME_ITEM_IDS,
+      });
+      suppressCompletionAudioRef.current = !gameComplete && importedGameComplete;
     });
-    suppressCompletionAudioRef.current = !gameComplete && importedGameComplete;
-    updateGame(importedState);
-    try { setSaveText(encodeSave(importedState)); } catch { setSaveText(''); }
+    if (!result.ok) return result;
     setSelectedItemId(null);
     setSelectedItemIds([]);
     setMultiSelectionMode(false);
@@ -764,15 +737,12 @@ export default function App() {
     setMissingMemberId(null);
     setActivePuzzleId(null);
     setActiveRightPanel(null);
-    setAutosaveEnabled(true);
-    setCanStartFresh(false);
-    setRecoveryNotice(null);
     setToast(result.notice ? `${result.notice} Laboratory restored.` : 'Laboratory restored from the imported save.');
-    return { ok: true, state: importedState };
+    return { ok: true, state: result.state };
   };
 
   const openSaveDialog = () => {
-    try { setSaveText(encodeSave(game)); } catch { setSaveText(''); }
+    prepareSaveText();
     setSaveOpen(true);
   };
 
@@ -804,11 +774,18 @@ export default function App() {
     }
   };
 
+  const handleAudioPreview = async (event) => {
+    const gestureEvent = event?.nativeEvent ?? event;
+    if (gestureEvent?.isTrusted !== true) return false;
+    try {
+      return Boolean(await audioAdapterRef.current?.preview());
+    } catch {
+      return false;
+    }
+  };
+
   const handleStartFresh = () => {
-    if (!canStartFresh) return;
-    setAutosaveEnabled(true);
-    setCanStartFresh(false);
-    setRecoveryNotice(null);
+    if (!startFresh()) return;
     setToast('Autosave is enabled for this fresh laboratory. The damaged save remains in recovery storage.');
   };
 
@@ -822,6 +799,17 @@ export default function App() {
     if (activePuzzle) setActivePuzzleId(activePuzzle.id);
     setActiveRightPanel('puzzle');
     setActiveLeftPanel(null);
+  };
+
+  const closeInspector = () => {
+    setActiveRightPanel(null);
+    const focusCandidates = [selectedItemId, ...selectedItemIds].filter(Boolean);
+    window.requestAnimationFrame(() => worldRef.current?.focusItemControl(focusCandidates));
+  };
+
+  const closePuzzle = () => {
+    setActiveRightPanel(null);
+    window.requestAnimationFrame(() => openPuzzleButtonRef.current?.focus());
   };
 
   return (
@@ -838,16 +826,20 @@ export default function App() {
         </div>
         <div className="header-progress" aria-label={`Laboratory ${restoredPercent}% restored`}>
           <span className="progress-dial" aria-hidden="true">{restoredPercent}<small>%</small></span>
-          <span><strong>Restoration</strong><small data-testid="skill-points">{(progress.completedCollectionIds ?? []).length} collections · Skill points: {progress.skillPoints}</small><small data-testid="chapter-progress">Research collections: {chapterCompletedCount} of {CHAPTER_COLLECTIONS.length}</small><small data-testid="invention-stage">Invention stage: {game.inventionStage}</small></span>
+          <span><strong>Restoration</strong><small data-testid="skill-points">{(progress.completedCollectionIds ?? []).length} collection rewards · Skill points: {progress.skillPoints}</small><small data-testid="chapter-progress">Research collections: {chapterCompletedCount} of {CHAPTER_COLLECTIONS.length}</small><small data-testid="invention-stage">Invention stage: {game.inventionStage}</small></span>
         </div>
         <nav className="header-actions" aria-label="Laboratory tools">
-          <button type="button" className="header-control" data-testid="toggle-notebook" aria-pressed={activeLeftPanel === 'notebook'} onClick={() => setActiveLeftPanel(activeLeftPanel === 'notebook' ? null : 'notebook')}>Notebook</button>
+          <button type="button" className="header-control" data-testid="toggle-notebook" aria-pressed={activeLeftPanel === 'notebook'} onClick={() => {
+            const openingNotebook = activeLeftPanel !== 'notebook';
+            setActiveLeftPanel(openingNotebook ? 'notebook' : null);
+            if (openingNotebook && isCompact) setActiveRightPanel(null);
+          }}>Notebook</button>
           <button type="button" className="header-control" data-testid="toggle-skills" aria-pressed={activeLeftPanel === 'skills'} onClick={() => {
             const openingSkills = activeLeftPanel !== 'skills';
             setActiveLeftPanel(openingSkills ? 'skills' : null);
-            if (openingSkills && (activeRightPanel === 'puzzle' || activeRightPanel === 'inspector')) setActiveRightPanel(null);
+            if (openingSkills && (isCompact || activeRightPanel === 'puzzle' || activeRightPanel === 'inspector')) setActiveRightPanel(null);
           }}>Instruments</button>
-          {activePuzzle && <button type="button" className="header-control puzzle-nav" data-testid="open-puzzle" onClick={openPuzzle}>{puzzleSolved ? `${activePuzzle.title} · solved` : activePuzzle.title}</button>}
+          {activePuzzle && <button ref={openPuzzleButtonRef} type="button" className="header-control puzzle-nav" data-testid="open-puzzle" onClick={openPuzzle}>{puzzleSolved ? `${activePuzzle.title} · solved` : activePuzzle.title}</button>}
           <button type="button" className="header-control" data-testid="open-saves" onClick={openSaveDialog}>Save &amp; restore</button>
           <button type="button" className="header-control" data-testid="open-settings" onClick={() => { setPreferencesStatus(''); setSettingsOpen(true); }}>Settings</button>
         </nav>
@@ -866,7 +858,7 @@ export default function App() {
               <button type="button" className="text-control" data-testid="recovery-open-saves" onClick={openSaveDialog}>
                 Open Save &amp; Restore
               </button>
-              {autosaveEnabled && <button type="button" className="panel-close" aria-label="Dismiss save recovery notice" onClick={() => setRecoveryNotice(null)}>×</button>}
+              {autosaveEnabled && <button type="button" className="panel-close" aria-label="Dismiss save recovery notice" onClick={dismissRecoveryNotice}>×</button>}
             </div>
           </aside>
         )}
@@ -874,6 +866,7 @@ export default function App() {
         {activeLeftPanel === 'skills' && <SkillsPanel progress={progress} activeSkillIds={activeSkillIds} canUseSkills={canUseSkills} onPurchaseSkill={handlePurchaseSkill} onToggleSkill={handleToggleSkill} />}
         <WorldViewport
           ref={worldRef}
+          overlayRoot={worldOverlayHost}
           items={game.items}
           destinations={DESTINATIONS}
           scratchPads={scratchPads}
@@ -885,18 +878,27 @@ export default function App() {
           onToggleItemSelection={handleToggleItemSelection}
           onToggleSelectionMode={handleToggleMultiSelectionMode}
           onOpenFinder={handleOpenFinder}
+          onOpenAtlas={() => {
+            setToast('');
+            if (isCompact) {
+              setActiveLeftPanel(null);
+              setActiveRightPanel(null);
+            }
+          }}
           selectedItemId={selectedItemId}
           selectedItemIds={selectedItemIds}
           multiSelectionMode={multiSelectionMode}
           keyboardFocusItemId={keyboardFocusItemId}
           lensActive={lensActive}
-          highlightedItemIds={missingMemberId ? [missingMemberId] : []}
+          highlightedItemIds={highlightedItemIds}
           guidedDestinationId={guidedDestination?.destinationId}
           guidedItemTitle={guidedDestination?.itemTitle}
           inventionStage={game.inventionStage}
           progress={progress}
           worldBounds={WORLD_BOUNDS}
+          toastText={toast}
         />
+        <div className="world-overlay-host" ref={setWorldOverlayHost} />
         {activeRightPanel === 'inspector' && (
           <ItemInspector
             item={selectedItem}
@@ -904,7 +906,7 @@ export default function App() {
             destinations={DESTINATIONS}
             scratchPads={scratchPads}
             focusMoveItemId={keyboardFocusItemId}
-            onClose={() => setActiveRightPanel(null)}
+            onClose={closeInspector}
             onFocus={(item) => worldRef.current?.focusItem(item)}
             onMove={(itemOrItems, target) => Array.isArray(itemOrItems)
               ? handleBatchInspectorMove(itemOrItems, target)
@@ -912,9 +914,8 @@ export default function App() {
           />
         )}
         {activeRightPanel === 'puzzle' && activePuzzle && (
-          <PuzzlePanel puzzle={activePuzzle} solved={puzzleSolved} unlockedPuzzles={unlockedPuzzles} onSelectPuzzle={setActivePuzzleId} onSolve={handleSolvePuzzle} onClose={() => setActiveRightPanel(null)} />
+          <PuzzlePanel puzzle={activePuzzle} solved={puzzleSolved} unlockedPuzzles={unlockedPuzzles} onSelectPuzzle={setActivePuzzleId} onSolve={handleSolvePuzzle} onClose={closePuzzle} />
         )}
-        <div className="lab-toast" aria-live="polite" role="status" data-testid="game-feedback">{toast}</div>
         <div className="sr-only" aria-live="polite" data-testid="skill-announcer">{lensMessage}</div>
         <div className="game-save-indicator" aria-live="polite" data-testid="autosave-status">{saveStatus}</div>
       </main>
@@ -932,6 +933,7 @@ export default function App() {
           preferences={preferences}
           saveStatus={preferencesStatus}
           onChange={handlePreferenceChange}
+          onPreviewSound={handleAudioPreview}
           onClose={() => setSettingsOpen(false)}
         />
       )}

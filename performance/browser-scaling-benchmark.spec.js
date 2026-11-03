@@ -182,9 +182,18 @@ async function installBenchmarkInstrumentation(page) {
     const state = {
       longTasks: [],
       activeFrameRun: null,
+      overviewCanvasClearCount: 0,
       observerSupported: typeof PerformanceObserver !== 'undefined',
     };
     window.__labScalingBenchmark = state;
+
+    const nativeClearRect = CanvasRenderingContext2D.prototype.clearRect;
+    CanvasRenderingContext2D.prototype.clearRect = function (...args) {
+      if (this.canvas?.classList?.contains('world-overview-canvas')) {
+        state.overviewCanvasClearCount += 1;
+      }
+      return nativeClearRect.apply(this, args);
+    };
 
     try {
       const observer = new PerformanceObserver((entries) => {
@@ -422,13 +431,44 @@ async function measureWheelZoom(page, label) {
   const zoomBefore = await zoomReadout.innerText();
   const currentScale = Number.parseFloat(zoomBefore) / 100;
   const wheelDeltaY = currentScale <= 0.2 ? -320 : 320;
+  const rendererBeforeWheel = await page.evaluate(() => {
+    const canvas = document.querySelector('.world-overview-canvas');
+    const overviewCanvasVisible = Boolean(canvas)
+      && !canvas.hidden
+      && getComputedStyle(canvas).display !== 'none';
+    return {
+      mode: overviewCanvasVisible ? 'overview' : 'detail',
+      clearCount: window.__labScalingBenchmark.overviewCanvasClearCount,
+    };
+  });
   const measurement = await sampleInteraction(page, label, async () => {
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.wheel(0, wheelDeltaY);
   });
   await expect(zoomReadout).not.toHaveText(zoomBefore);
   const zoomAfter = await zoomReadout.innerText();
-  return { ...measurement, wheelDeltaY, zoomBefore, zoomAfter };
+  const rendererAfterWheel = await page.evaluate(() => {
+    const canvas = document.querySelector('.world-overview-canvas');
+    const overviewCanvasVisible = Boolean(canvas)
+      && !canvas.hidden
+      && getComputedStyle(canvas).display !== 'none';
+    return {
+      mode: overviewCanvasVisible ? 'overview' : 'detail',
+      mountedCardCount: document.querySelectorAll('.lab-object').length,
+      canvasRepresentedItemCount: overviewCanvasVisible
+        ? Number(canvas.getAttribute('data-rendered-item-count') ?? 0)
+        : 0,
+      clearCount: window.__labScalingBenchmark.overviewCanvasClearCount,
+      zoomLevel: document.querySelector('.zoom-readout')?.textContent?.trim() ?? null,
+    };
+  });
+  rendererAfterWheel.clearCountDelta = rendererAfterWheel.clearCount - rendererBeforeWheel.clearCount;
+  if (rendererBeforeWheel.mode === 'overview' && rendererAfterWheel.mode === 'overview') {
+    expect(rendererAfterWheel.clearCountDelta,
+      'a camera-only wheel zoom in overview mode should not clear and redraw the full world canvas')
+      .toBe(0);
+  }
+  return { ...measurement, wheelDeltaY, zoomBefore, zoomAfter, rendererBeforeWheel, rendererAfterWheel };
 }
 
 async function measureCalibrationDrag(page, label) {
@@ -462,6 +502,18 @@ async function captureView(context, fixture, itemCount, view) {
     expect(metrics.mountedItemCount, 'populated sparse view should cull the total save').toBeLessThan(itemCount);
     expect(metrics.mountedItemIds, 'sparse readiness metrics should include all eight calibration IDs')
       .toEqual(expect.arrayContaining(sparseCalibrationItemIds));
+  }
+  if (view.id === 'start' && itemCount === 174) {
+    expect(metrics.overviewCanvasVisible, 'the current 174-item starting view should retain readable detail cards')
+      .toBe(false);
+  }
+  if (view.id === 'start' && itemCount === 5_024) {
+    expect(metrics.overviewCanvasVisible, 'the dense 5,024-item starting view should use the overview Canvas')
+      .toBe(true);
+    expect(metrics.canvasRepresentedItemCount, 'the overview should represent all items in the dense starting view')
+      .toBe(itemCount);
+    expect(metrics.overlayItemCount, 'dense starting-view DOM overlays should respect the 64-card budget')
+      .toBeLessThanOrEqual(64);
   }
   if (view.id === 'full-world') {
     expect(metrics.overviewCanvasVisible, 'full-world stress view should use the overview Canvas').toBe(true);

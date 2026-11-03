@@ -118,7 +118,8 @@ test('the player can recover a misfiled card, restore its collection, and solve 
   expect(Math.abs(relatedCardAfter.y - relatedCardBefore.y)).toBeLessThan(1);
   expect(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey)).toBe(autosaveBeforeActivation);
 
-  await page.getByTestId('open-puzzle').click();
+  const puzzleHeaderControl = page.getByTestId('open-puzzle');
+  await puzzleHeaderControl.click();
 
   const puzzle = page.getByTestId('puzzle-panel');
   await expect(puzzle).toBeVisible();
@@ -131,6 +132,10 @@ test('the player can recover a misfiled card, restore its collection, and solve 
   await expect.poll(() => readAudioEventTypes(page)).toContain('puzzle.completed');
   await expect.poll(() => readAudioEventTypes(page)).toContain('machinery.stage.changed');
   await expect(page.getByTestId('invention-stage')).toContainText('Memory Crystal');
+
+  await puzzle.getByRole('button', { name: 'Close puzzle panel' }).click();
+  await expect(puzzle).toBeHidden();
+  await expect(puzzleHeaderControl).toBeFocused();
 });
 
 test('accessible multi-selection completes a collection with one reward and puzzle unlock', async ({ page }) => {

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { containModalTabFocus, getModalFocusableElements } from './modalFocus.js';
 import {
   deleteManualSaveSlot,
   readManualSaveSlots,
@@ -49,6 +50,14 @@ export function SaveDialog({ encodedSave, saveStatus, onClose, onImport }) {
 
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
+  useEffect(() => {
+    if (!pendingAction) return undefined;
+    const focusFrame = requestAnimationFrame(() => {
+      dialogRef.current?.querySelector('.manual-save-slot__confirmation button:not(:disabled)')?.focus();
+    });
+    return () => cancelAnimationFrame(focusFrame);
+  }, [pendingAction]);
+
   const beginPendingAction = (type, slotId, triggerAction) => {
     const nextAction = { type, slotId, triggerAction };
     pendingActionRef.current = nextAction;
@@ -80,8 +89,7 @@ export function SaveDialog({ encodedSave, saveStatus, onClose, onImport }) {
   useEffect(() => {
     const previousFocus = document.activeElement;
     const dialog = dialogRef.current;
-    const focusables = () => [...(dialog?.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled)') ?? [])];
-    focusables()[0]?.focus();
+    getModalFocusableElements(dialog)[0]?.focus();
     const onKeyDown = (event) => {
       if (event.key === 'Escape') {
         if (pendingActionRef.current) {
@@ -91,18 +99,7 @@ export function SaveDialog({ encodedSave, saveStatus, onClose, onImport }) {
         onCloseRef.current();
         return;
       }
-      if (event.key !== 'Tab') return;
-      const elements = focusables();
-      if (elements.length === 0) return;
-      const first = elements[0];
-      const last = elements[elements.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
+      containModalTabFocus(event, dialog);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => {
@@ -307,7 +304,7 @@ export function SaveDialog({ encodedSave, saveStatus, onClose, onImport }) {
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="save-dialog" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="save-dialog-title" data-testid="save-dialog">
+      <section className="save-dialog" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="save-dialog-title" data-testid="save-dialog" tabIndex="-1">
         <header className="panel-heading">
           <div><p className="eyebrow">Keep your discoveries</p><h2 id="save-dialog-title">Save &amp; Restore</h2></div>
           <button type="button" className="panel-close" aria-label="Close save dialog" onClick={onClose}>×</button>
