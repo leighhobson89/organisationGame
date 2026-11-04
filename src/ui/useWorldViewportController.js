@@ -455,7 +455,8 @@ export function useWorldViewportController({
       if (distance >= 4) gesture.moved = true;
       return;
     }
-    if (distance < 4 && !gesture.moved) return;
+    const dragThreshold = gesture.pointerType === 'touch' ? 10 : 4;
+    if (distance < dragThreshold && !gesture.moved) return;
     if (!gesture.moved) emitGameAudioEvent('item.pickup', { itemId: gesture.itemId });
     gesture.moved = true;
     gesture.latestLocal = local;
@@ -535,11 +536,23 @@ export function useWorldViewportController({
   const onWheel = useCallback((event) => {
     if (event.target.closest('.world-atlas-panel')) return;
     if (event.target.closest('.world-item-finder')) return;
+    if (event.deltaY === 0 && event.deltaX === 0) return;
     event.preventDefault();
-    const point = getPoint(event, viewportRef.current);
     const currentCamera = cameraRef.current;
-    const nextScale = currentCamera.scale * (event.deltaY < 0 ? 1.12 : 0.89);
-    scheduleCamera(zoomAtPointer(currentCamera, point, nextScale));
+    if (event.deltaY === 0) {
+      scheduleCamera({ ...currentCamera, panX: currentCamera.panX - event.deltaX });
+    } else {
+      const point = getPoint(event, viewportRef.current);
+      const deltaModeScale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? 40
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? 120
+          : 1;
+      const normalizedDeltaY = Math.max(-120, Math.min(120, event.deltaY * deltaModeScale));
+      const zoomFactor = Math.pow(1.12, -normalizedDeltaY / 120);
+      const nextScale = currentCamera.scale * zoomFactor;
+      scheduleCamera(zoomAtPointer(currentCamera, point, nextScale));
+    }
     if (zoomCommitTimerRef.current !== null) window.clearTimeout(zoomCommitTimerRef.current);
     zoomCommitTimerRef.current = window.setTimeout(() => {
       zoomCommitTimerRef.current = null;

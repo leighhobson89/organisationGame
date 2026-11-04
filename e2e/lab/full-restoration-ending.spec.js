@@ -7,6 +7,7 @@ import { allocateTargetPlacement } from '../../src/game/world/placementLayout.js
 
 const autoSaveKey = 'palimpsest-laboratory.autosave.v1';
 const preferencesKey = 'palimpsest-laboratory.preferences.v1';
+const slotTwoKey = 'palimpsest-laboratory.manual.slot-2.v1';
 
 function createAlmostCompleteFixture() {
   const fresh = createNewGameState();
@@ -80,19 +81,20 @@ function createFullyFiledState() {
   });
 }
 
-async function openEndingFromAlmostCompleteFixture(page) {
+async function openEndingFromAlmostCompleteFixture(page, { textScale = 1.25 } = {}) {
   const fixture = createAlmostCompleteFixture();
-  await page.addInitScript(({ saveKey, savedPreferencesKey, value }) => {
+  await page.addInitScript(({ saveKey, savedPreferencesKey, textScale, value }) => {
     window.localStorage.setItem(saveKey, value);
     window.localStorage.setItem(savedPreferencesKey, JSON.stringify({
       version: 1,
-      textScale: 1.25,
+      textScale,
       reduceMotion: false,
       soundEffectsEnabled: false,
     }));
   }, {
     saveKey: autoSaveKey,
     savedPreferencesKey: preferencesKey,
+    textScale,
     value: fixture.encodedSave,
   });
   await page.goto('/');
@@ -272,11 +274,11 @@ test('the final correct filing triggers the Engine ending once and keeps the res
   await expect(ending).toContainText(/(?:Professor.{0,60}and.{0,25}Elian|Elian.{0,60}and.{0,25}Professor).{0,80}(?:witness|observed|saw)|(?:witness|observed|saw).{0,80}(?:Professor.{0,25}and.{0,25}Elian|Elian.{0,25}and.{0,25}Professor)|(?:Professor|Elian).{0,50}and.{0,25}(?:Professor|Elian).{0,80}witness/i);
   await expect(ending).toContainText(/(?:unsent|never sent).{0,40}apolog(?:y|ise)|apolog(?:y|ise).{0,40}(?:unsent|never sent)/i);
   const narrative = ending.locator('.completion-sequence__narrative');
-  await expect(narrative).toContainText(/The Professor chose to keep the Engine recording through an unstable echo,? so their account.{0,60}surviv/i);
-  await expect(narrative).not.toContainText(/strongest reading/i);
-  await expect(ending).toContainText(/(?:Professor|he).{0,100}(?:chose|decided|kept|continued).{0,50}(?:to )?(?:keep |continue )?(?:record(?:ing|er)?|the recorder running)/i);
-  await expect(ending).toContainText(/unstable.{0,40}echo/i);
-  await expect(ending).toContainText(/(?:their|our|the).{0,25}account.{0,60}(?:surviv|preserv|endure|remain)/i);
+  await expect(narrative).toContainText(/unsent apology.{0,100}(?:fear|worr\w*).{0,50}Elian.{0,50}blame.{0,35}(?:machine|Engine)/i);
+  await expect(narrative).toContainText(/Elian.{0,40}blame.{0,30}(?:machine|Engine).{0,45}(?:choice|decision)|(?:choice|decision).{0,45}(?:machine|Engine).{0,50}Elian.{0,40}blame/i);
+  await expect(narrative).toContainText(/(?:records|apology).{0,60}(?:do not|don't|never).{0,50}(?:name|identify|specify|explain).{0,50}(?:choice|decision)/i);
+  await expect(narrative).toContainText(/do not.{0,50}(?:establish|say|show|explain|reveal).{0,60}(?:whether|how).{0,50}choice.{0,70}(?:connected|related|linked|caused|triggered).{0,60}Chaos Event/i);
+  await expect(narrative).not.toContainText(/keep the Engine recording through an unstable echo/i);
   await expect(ending).toContainText(/records?.{0,140}(?:(?:do not|don't|cannot|can't|fail to).{0,50}(?:establish|tell|reveal|show|say)|(?:remain|leave).{0,50}(?:unclear|unknown|unanswered)).{0,100}(?:what began|how.{0,20}began|start(?:ed)?|origin|cause).{0,60}Chaos Event/i);
   await expect(ending).toContainText(/(?:Elian.{0,80}(?:response|reaction|respond(?:ed|s|ing)?|choice|what.{0,20}did next).{0,60}(?:unknown|unrecorded|unclear|unestablished|unresolved|not preserved|not described|open)|(?:unknown|unrecorded|unclear|unestablished|unresolved|not preserved|not described|open).{0,60}Elian.{0,40}(?:response|reaction|respond(?:ed|s|ing)?|choice|what.{0,20}did next))/i);
   await expect(ending.getByTestId('completion-stat-items')).toContainText('174 of 174');
@@ -343,19 +345,23 @@ test('the completion dialog recovers Tab focus when focus moves outside it', asy
   await expect(ending).toBeVisible();
 });
 
-for (const viewport of [
-  { width: 320, height: 480 },
-  { width: 390, height: 480 },
+for (const { viewport, percent, textScale } of [
+  { viewport: { width: 320, height: 480 }, percent: 125, textScale: 1.25 },
+  { viewport: { width: 320, height: 480 }, percent: 150, textScale: 1.5 },
+  { viewport: { width: 390, height: 480 }, percent: 125, textScale: 1.25 },
+  { viewport: { width: 390, height: 480 }, percent: 150, textScale: 1.5 },
+  { viewport: { width: 320, height: 400 }, percent: 150, textScale: 1.5 },
+  { viewport: { width: 390, height: 400 }, percent: 150, textScale: 1.5 },
 ]) {
-  test(`the restoration ending stays readable and keyboard reachable at ${viewport.width}x${viewport.height} with 125% text`, async ({ page }) => {
+  test(`the restoration ending stays readable and keyboard reachable at ${viewport.width}x${viewport.height} with ${percent}% text`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: 'no-preference' });
-    const ending = await openEndingFromAlmostCompleteFixture(page);
+    const ending = await openEndingFromAlmostCompleteFixture(page, { textScale });
     const dialog = ending.getByRole('dialog');
-    const textScale = await page.locator('html').evaluate((root) => (
+    const appliedTextScale = await page.locator('html').evaluate((root) => (
       getComputedStyle(root).getPropertyValue('--text-scale').trim()
     ));
-    expect(textScale).toBe('1.25');
+    expect(appliedTextScale).toBe(String(textScale));
 
     const heading = ending.getByRole('heading', { name: 'The laboratory is restored' });
     await expect(heading).toBeFocused();
@@ -403,44 +409,45 @@ for (const viewport of [
         windowHeight: window.innerHeight,
       };
     });
-    expect(continueBounds.top, 'Continue should be within the dialog scrollport after keyboard focus')
-      .toBeGreaterThanOrEqual(continueBounds.scrollTop - 1);
-    expect(continueBounds.bottom, 'Continue should be within the dialog scrollport after keyboard focus')
-      .toBeLessThanOrEqual(continueBounds.scrollBottom + 1);
-    expect(continueBounds.left, 'Continue should be inside the visible window after keyboard focus')
-      .toBeGreaterThanOrEqual(Math.max(continueBounds.scrollLeft, 0) - 1);
-    expect(continueBounds.right, 'Continue should be inside the visible window after keyboard focus')
-      .toBeLessThanOrEqual(Math.min(continueBounds.scrollRight, continueBounds.windowWidth) + 1);
-    expect(continueBounds.top, 'Continue should be inside the visible window after keyboard focus')
-      .toBeGreaterThanOrEqual(-1);
-    expect(continueBounds.bottom, 'Continue should be inside the visible window after keyboard focus')
-      .toBeLessThanOrEqual(continueBounds.windowHeight + 1);
-
-    const horizontalMeasurements = await ending.locator([
-      '.completion-sequence',
-      '.completion-sequence__dialog',
-      '.completion-sequence__content',
-      '.completion-sequence__stats',
-      '.completion-sequence__stat',
-    ].join(', ')).evaluateAll((elements) => elements.map((element) => ({
-      name: element.className,
-      clientWidth: element.clientWidth,
-      scrollWidth: element.scrollWidth,
-      left: element.getBoundingClientRect().left,
-      right: element.getBoundingClientRect().right,
-    })));
-    for (const measurement of horizontalMeasurements) {
-      expect(measurement.scrollWidth, `${measurement.name} should not overflow horizontally`)
-        .toBeLessThanOrEqual(measurement.clientWidth + 1);
-      expect(measurement.left, `${measurement.name} should remain inside the viewport`)
+      expect(continueBounds.top, 'Continue should be within the dialog scrollport after keyboard focus')
+        .toBeGreaterThanOrEqual(continueBounds.scrollTop - 1);
+      expect(continueBounds.bottom, 'Continue should be within the dialog scrollport after keyboard focus')
+        .toBeLessThanOrEqual(continueBounds.scrollBottom + 1);
+      expect(continueBounds.left, 'Continue should be inside the visible window after keyboard focus')
+        .toBeGreaterThanOrEqual(Math.max(continueBounds.scrollLeft, 0) - 1);
+      expect(continueBounds.right, 'Continue should be inside the visible window after keyboard focus')
+        .toBeLessThanOrEqual(Math.min(continueBounds.scrollRight, continueBounds.windowWidth) + 1);
+      expect(continueBounds.top, 'Continue should be inside the visible window after keyboard focus')
         .toBeGreaterThanOrEqual(-1);
-      expect(measurement.right, `${measurement.name} should remain inside the viewport`)
-        .toBeLessThanOrEqual(viewport.width + 1);
-    }
+      expect(continueBounds.bottom, 'Continue should be inside the visible window after keyboard focus')
+        .toBeLessThanOrEqual(continueBounds.windowHeight + 1);
 
-    await page.keyboard.press('Enter');
-    await expect(ending).toBeHidden();
-  });
+      const horizontalMeasurements = await ending.locator([
+        '.completion-sequence',
+        '.completion-sequence__dialog',
+        '.completion-sequence__content',
+        '.completion-sequence__stats',
+        '.completion-sequence__stat',
+      ].join(', ')).evaluateAll((elements) => elements.map((element) => ({
+        name: element.className,
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        left: element.getBoundingClientRect().left,
+        right: element.getBoundingClientRect().right,
+      })));
+      for (const measurement of horizontalMeasurements) {
+        expect(measurement.scrollWidth, `${measurement.name} should not overflow horizontally`)
+          .toBeLessThanOrEqual(measurement.clientWidth + 1);
+        expect(measurement.left, `${measurement.name} should remain inside the viewport`)
+          .toBeGreaterThanOrEqual(-1);
+        expect(measurement.right, `${measurement.name} should remain inside the viewport`)
+          .toBeLessThanOrEqual(viewport.width + 1);
+      }
+
+      await page.keyboard.press('Enter');
+      await expect(ending).toBeHidden();
+      await expect(page.getByTestId('world-item-count')).toHaveText('174 objects');
+    });
 }
 
 test('importing a restored save shows the ending without activation, then real completion activates once', async ({ page }) => {
@@ -449,19 +456,30 @@ test('importing a restored save shows the ending without activation, then real c
   await observeAudioEvents(page);
   expect(await readAudioEventTypes(page)).toEqual([]);
 
-  await page.getByTestId('open-saves').click();
+  const openSaves = page.getByTestId('open-saves');
+  const saveDialog = page.getByRole('dialog', { name: /save & restore/i });
+  await openSaves.click();
   await page.getByTestId('save-import-string').fill(encodeSave(createFullyFiledState()));
   await page.getByRole('checkbox', { name: /valid import replaces the current laboratory/i }).check();
   await page.getByRole('button', { name: 'Validate & import save' }).click();
 
   await expect(page.getByTestId('save-feedback')).toContainText(/save imported/i);
-  await expect(page.getByTestId('completion-sequence')).toBeVisible();
+  const importedEnding = page.getByTestId('completion-sequence');
+  await expect(importedEnding).toBeVisible();
   await expect.poll(async () => (await readAudioEventTypes(page)).filter((type) => type === 'invention.activated')).toEqual([]);
 
-  await page.getByRole('button', { name: 'Continue exploring' }).click();
-  await expect(page.getByTestId('completion-sequence')).toHaveCount(0);
+  await importedEnding.getByRole('button', { name: 'Continue exploring' }).click();
+  await expect(importedEnding).toHaveCount(0);
+  await expect(saveDialog).toHaveCount(0);
+  await expect(openSaves).toBeFocused();
+  await expect(page.getByRole('group', { name: 'World navigation controls' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Find an item' })).toBeEnabled();
+  await expect(page.getByTestId('world-item-count')).toHaveText('174 objects');
+  await expect.poll(async () => (await readAudioEventTypes(page)).filter((type) => type === 'invention.activated')).toEqual([]);
 
   const incompleteFixture = createAlmostCompleteFixture();
+  await openSaves.click();
+  await expect(saveDialog).toBeVisible();
   await page.getByTestId('save-import-string').fill(incompleteFixture.encodedSave);
   await page.getByRole('checkbox', { name: /valid import replaces the current laboratory/i }).check();
   await page.getByRole('button', { name: 'Validate & import save' }).click();
@@ -482,6 +500,45 @@ test('importing a restored save shows the ending without activation, then real c
   const eventTypes = await readAudioEventTypes(page);
   expect(eventTypes.filter((type) => type === 'invention.activated')).toHaveLength(1);
   expect(eventTypes.slice(-2)).toEqual(['item.placement.correct', 'invention.activated']);
+});
+
+test('restoring a completed manual slot shows the ending without activation and returns focus to the lab', async ({ page }) => {
+  const slotTwo = JSON.stringify({
+    version: 1,
+    slotId: 2,
+    savedAt: '2026-11-04T12:00:00.000Z',
+    encodedSave: encodeSave(createFullyFiledState()),
+  });
+  await page.addInitScript(({ key, value }) => window.localStorage.setItem(key, value), {
+    key: slotTwoKey,
+    value: slotTwo,
+  });
+  await page.goto('/');
+  await observeAudioEvents(page);
+  expect(await readAudioEventTypes(page)).toEqual([]);
+
+  const openSaves = page.getByTestId('open-saves');
+  const saveDialog = page.getByRole('dialog', { name: /save & restore/i });
+  await openSaves.click();
+  await expect(saveDialog).toBeVisible();
+
+  const slot = page.getByRole('region', { name: 'Slot 2' });
+  await slot.getByRole('button', { name: 'Restore Slot 2', exact: true }).click();
+  await slot.getByRole('button', { name: 'Confirm restore to Slot 2', exact: true }).click();
+
+  const ending = page.getByTestId('completion-sequence');
+  await expect(ending).toBeVisible();
+  await expect(ending.getByRole('heading', { name: 'The laboratory is restored' })).toBeFocused();
+  await expect.poll(async () => (await readAudioEventTypes(page)).filter((type) => type === 'invention.activated')).toEqual([]);
+
+  await ending.getByRole('button', { name: 'Continue exploring' }).click();
+  await expect(ending).toHaveCount(0);
+  await expect(saveDialog).toHaveCount(0);
+  await expect(openSaves).toBeFocused();
+  await expect(page.getByRole('group', { name: 'World navigation controls' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Find an item' })).toBeEnabled();
+  await expect(page.getByTestId('world-item-count')).toHaveText('174 objects');
+  await expect.poll(async () => (await readAudioEventTypes(page)).filter((type) => type === 'invention.activated')).toEqual([]);
 });
 
 for (const scenario of incompleteCompletionScenarios) {

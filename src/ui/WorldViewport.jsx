@@ -719,9 +719,24 @@ export const WorldViewport = forwardRef(function WorldViewport({
     }
     if (kind === 'scratchpad') {
       const pad = scratchPads.find((entry) => entry.id === id);
-      if (pad) focusWorldPoint({ x: pad.position.x + pad.width / 2, y: pad.position.y + pad.height / 2 }, 0.72);
+      if (pad) focusWorldPoint({ x: pad.position.x + pad.width / 2, y: pad.position.y + pad.height / 2 }, fitTargetScale(pad, 0.72));
     }
   };
+
+  const atlasToggle = (
+    <button
+      ref={atlasToggleRef}
+      className={`hud-control world-atlas-toggle${overlayRoot ? ' world-atlas-toggle--portal' : ''}`}
+      type="button"
+      data-testid="world-atlas-toggle"
+      aria-label={atlasOpen ? 'Close Clockwork Atlas' : 'Open Clockwork Atlas'}
+      aria-expanded={atlasOpen}
+      aria-controls="world-atlas-panel"
+      onClick={toggleAtlas}
+    >
+      Atlas
+    </button>
+  );
 
   return (
     <>
@@ -747,8 +762,7 @@ export const WorldViewport = forwardRef(function WorldViewport({
       }}
       onWheel={onWheel}
       onKeyDown={(event) => {
-        if (event.target?.closest?.('.world-item-finder, .world-atlas-panel')) return;
-        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName)) return;
+        if (event.target !== event.currentTarget) return;
         const step = event.shiftKey ? 180 : 90;
         const directions = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] };
         const delta = directions[event.key];
@@ -825,19 +839,8 @@ export const WorldViewport = forwardRef(function WorldViewport({
           {canvasOnlyHighlightedTitles.join(', ')}
         </section>
       )}
-      {finderOpen && <ItemFinder items={items} onSelectItem={selectFinderItem} onClose={closeFinder} />}
-      <button
-        ref={atlasToggleRef}
-        className="hud-control world-atlas-toggle"
-        type="button"
-        data-testid="world-atlas-toggle"
-        aria-label={atlasOpen ? 'Close Clockwork Atlas' : 'Open Clockwork Atlas'}
-        aria-expanded={atlasOpen}
-        aria-controls="world-atlas-panel"
-        onClick={toggleAtlas}
-      >
-        Atlas
-      </button>
+      {finderOpen && !overlayRoot && <ItemFinder items={items} onSelectItem={selectFinderItem} onClose={closeFinder} />}
+      {!overlayRoot && atlasToggle}
       {atlasOpen && (
         <WorldAtlasPanel
           atlasCamera={atlasCamera}
@@ -874,6 +877,11 @@ export const WorldViewport = forwardRef(function WorldViewport({
       <div className="sr-only" role="status" aria-live="polite" data-testid="zoom-announcer">{zoomAnnouncement}</div>
       <div className="sr-only" aria-live="polite" data-testid="world-announcer" />
     </section>
+    {finderOpen && overlayRoot && createPortal(
+      <ItemFinder items={items} onSelectItem={selectFinderItem} onClose={closeFinder} />,
+      overlayRoot,
+    )}
+    {overlayRoot && createPortal(atlasToggle, overlayRoot)}
     {overlayRoot && createPortal(
       <div className="world-bottom-stack">
         <p className="world-hint">{multiSelectionMode
@@ -893,7 +901,25 @@ export const WorldViewport = forwardRef(function WorldViewport({
             </span>
           </>}</p>
         <div className="lab-toast" aria-live="polite" role="status" data-testid="game-feedback">{toastText}</div>
-        <div className="game-toolbar" role="group" aria-label="World navigation controls">
+        <div className="game-toolbar" role="group" aria-label="World navigation controls" onFocus={(event) => {
+          const toolbar = event.currentTarget;
+          const focusedControl = event.target;
+          const toolbarRect = toolbar.getBoundingClientRect();
+          const focusedRect = focusedControl instanceof HTMLElement
+            ? focusedControl.getBoundingClientRect()
+            : null;
+          const clippedByToolbar = focusedRect
+            && (focusedRect.left < toolbarRect.left - 1 || focusedRect.right > toolbarRect.right + 1);
+          const clippedByViewport = focusedRect
+            && (focusedRect.left < -1 || focusedRect.right > window.innerWidth + 1);
+          if (
+            toolbar.scrollWidth > toolbar.clientWidth + 1
+            && focusedControl instanceof HTMLElement
+            && (clippedByToolbar || clippedByViewport)
+          ) {
+            focusedControl.scrollIntoView({ block: 'nearest', inline: 'center' });
+          }
+        }}>
           <button className="hud-control" type="button" aria-label="Zoom out" title="Zoom out" onClick={() => zoomBy(0.84)}>−</button>
           <span className="zoom-readout">{Math.round(cullingCamera.scale * 100)}%</span>
           <button className="hud-control" type="button" aria-label="Zoom in" title="Zoom in" onClick={() => zoomBy(1.18)}>+</button>
@@ -913,17 +939,26 @@ export const WorldViewport = forwardRef(function WorldViewport({
               </optgroup>
             )}
           </select>
-          <button className="hud-control" type="button" onClick={focusStartingView}>Reset view</button>
-          <button ref={findButtonRef} className="hud-control" type="button" aria-label="Find an item" onClick={toggleFinder}>Find an item</button>
+          <button className="hud-control" type="button" aria-label="Reset view" title="Reset view" onClick={focusStartingView}>
+            <span className="control-label-long">Reset view</span>
+            <span className="control-label-short" aria-hidden="true">Reset</span>
+          </button>
+          <button ref={findButtonRef} className="hud-control" type="button" aria-label="Find an item" title="Find an item" onClick={toggleFinder}>
+            <span className="control-label-long">Find an item</span>
+            <span className="control-label-short" aria-hidden="true">Find</span>
+          </button>
           <button
             ref={selectionToggleButtonRef}
             className="hud-control"
             type="button"
             data-testid="multi-selection-toggle"
+            aria-label={multiSelectionMode ? 'Done selecting items' : 'Select multiple items'}
+            title={multiSelectionMode ? 'Done selecting items' : 'Select multiple items'}
             aria-pressed={multiSelectionMode}
             onClick={onToggleSelectionMode}
           >
-            {multiSelectionMode ? 'Done selecting items' : 'Select multiple items'}
+            <span className="control-label-long">{multiSelectionMode ? 'Done selecting items' : 'Select multiple items'}</span>
+            <span className="control-label-short" aria-hidden="true">{multiSelectionMode ? 'Done' : 'Select'}</span>
           </button>
           {(multiSelectionMode || selectedItemIds.length > 0) && <span className="world-count" data-testid="multi-selection-count" aria-live="polite">{selectedItemIds.length} selected</span>}
           <span className="world-count" data-testid="world-item-count" aria-label={`${itemCount} laboratory objects`}>{itemCount} objects</span>

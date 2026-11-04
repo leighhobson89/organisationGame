@@ -1,6 +1,6 @@
 # Game Vision: The Professor's Lost Laboratory
 
-**Status:** The first two research chapters and a derived ending for the current 174-item laboratory are implemented and playable. The ending resolves the Professor's recording choice from existing clues while leaving the Chaos Event's original trigger and Elian's response unresolved. Broader content and the full-game arc remain future work, and the independent human playthrough is still pending.
+**Status:** The first two research chapters and a derived ending for the current 174-item laboratory are implemented and playable. The ending stays within the recovered evidence: the Unsent Apology shows the Professor feared Elian would blame the machine for an unnamed choice, but the records do not name that choice or establish whether or how it related to the Chaos Event. The Event's original trigger and Elian's response remain unresolved. Broader content and the full-game arc remain future work, and the independent human playthrough is still pending.
 
 ## Player promise
 
@@ -96,11 +96,11 @@ that retains the crystal and adds a toothed, spoked wheel. When all
 every catalogued puzzle is solved, the Engine presents an evidence-bounded
 replay and derived completion statistics, then lets the player continue
 exploring. It did not ring the bell; it replayed an impression left by the
-Chaos Event. The Professor and Elian were both witnesses. The Professor chose
-to keep the Engine recording through an unstable echo so the account of what
-he and Elian witnessed would survive; his unsent apology supports that choice.
-The recovered material does not establish what originally triggered the Event
-or what Elian did afterward.
+Chaos Event. The Professor and Elian were both witnesses. The Unsent Apology
+shows the Professor feared Elian would blame the machine for an unnamed choice
+he made. The recovered material does not identify that choice or establish
+whether or how it related to the Event. It also does not establish what
+originally triggered the Event or what Elian did afterward.
 
 Two alternatives were considered and not selected:
 

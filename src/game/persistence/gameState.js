@@ -330,14 +330,16 @@ export function createDefaultProgress() {
 export function createStartingCamera() {
   const scale = 0.5;
   const viewportWidth = typeof window === 'undefined' ? 1280 : window.innerWidth;
-  const viewportHeight = typeof window === 'undefined' ? 800 : window.innerHeight - 68;
+  const windowHeight = typeof window === 'undefined' ? 800 : window.innerHeight;
+  const viewportHeight = windowHeight - 68;
   const focus = {
     x: viewportWidth <= 480 ? 944 : viewportWidth <= 720 ? 1106 : 1360,
     y: Math.min(650, viewportHeight + 130),
   };
+  const shortMobileViewport = viewportWidth <= 720 && windowHeight >= 360 && windowHeight <= 439;
   return {
     panX: viewportWidth / 2 + 70 - focus.x * scale,
-    panY: viewportHeight / 2 - focus.y * scale,
+    panY: viewportHeight / 2 - focus.y * scale - (shortMobileViewport ? 20 : 0),
     scale,
   };
 }

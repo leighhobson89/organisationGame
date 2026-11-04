@@ -828,7 +828,25 @@ export default function App() {
           <span className="progress-dial" aria-hidden="true">{restoredPercent}<small>%</small></span>
           <span><strong>Restoration</strong><small data-testid="skill-points">{(progress.completedCollectionIds ?? []).length} collection rewards · Skill points: {progress.skillPoints}</small><small data-testid="chapter-progress">Research collections: {chapterCompletedCount} of {CHAPTER_COLLECTIONS.length}</small><small data-testid="invention-stage">Invention stage: {game.inventionStage}</small></span>
         </div>
-        <nav className="header-actions" aria-label="Laboratory tools">
+        <nav className="header-actions" aria-label="Laboratory tools" onFocus={(event) => {
+          const actions = event.currentTarget;
+          const focusedControl = event.target;
+          const actionsRect = actions.getBoundingClientRect();
+          const focusedRect = focusedControl instanceof HTMLElement
+            ? focusedControl.getBoundingClientRect()
+            : null;
+          const clippedByActions = focusedRect
+            && (focusedRect.left < actionsRect.left - 1 || focusedRect.right > actionsRect.right + 1);
+          const clippedByViewport = focusedRect
+            && (focusedRect.left < -1 || focusedRect.right > window.innerWidth + 1);
+          if (
+            actions.scrollWidth > actions.clientWidth + 1
+            && focusedControl instanceof HTMLElement
+            && (clippedByActions || clippedByViewport)
+          ) {
+            focusedControl.scrollIntoView({ block: 'nearest', inline: 'center' });
+          }
+        }}>
           <button type="button" className="header-control" data-testid="toggle-notebook" aria-pressed={activeLeftPanel === 'notebook'} onClick={() => {
             const openingNotebook = activeLeftPanel !== 'notebook';
             setActiveLeftPanel(openingNotebook ? 'notebook' : null);
@@ -938,7 +956,14 @@ export default function App() {
         />
       )}
       {completionOpen && (
-        <CompletionSequence stats={completionStats} userReducedMotion={preferences.reduceMotion} onContinue={() => setCompletionOpen(false)} />
+        <CompletionSequence
+          stats={completionStats}
+          userReducedMotion={preferences.reduceMotion}
+          onContinue={() => {
+            setCompletionOpen(false);
+            setSaveOpen(false);
+          }}
+        />
       )}
     </div>
   );

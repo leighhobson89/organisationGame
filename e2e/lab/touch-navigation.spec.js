@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { createNewGameState } from '../../src/game/persistence/gameState.js';
 import { decodeSave, encodeSave } from '../../src/game/persistence/save.js';
+import { observeAudioEvents, readAudioEventTypes } from '../helpers/audioEvents.js';
 
 const autoSaveKey = 'palimpsest-laboratory.autosave.v1';
 const fixtureMarker = 'palimpsest-lab.touch-navigation-fixture-seeded';
@@ -213,6 +214,98 @@ test('a coarse-pointer tap selects an object without moving or filing it', async
     expect(savedItem.position).toEqual(originalItem.position);
     expect(savedItem.placement).toEqual(originalItem.placement);
     expect(savedItem.validation).toEqual(originalItem.validation);
+  });
+});
+
+test('minor touch drift selects an object without starting a drag', async ({ browser }) => {
+  await withTouchLab(browser, { dragItem: true }, async ({ page, client, state }) => {
+    const originalItem = state.items.find((item) => item.id === calibrationItemId);
+    const item = page.getByTestId(`lab-item-${calibrationItemId}`);
+    await expect(item).toBeVisible();
+    const itemBounds = await item.boundingBox();
+    expect(itemBounds).not.toBeNull();
+    const start = {
+      id: 1,
+      x: itemBounds.x + itemBounds.width / 2,
+      y: itemBounds.y + itemBounds.height / 2,
+    };
+    const cameraBefore = await readSceneCamera(page);
+    await observeAudioEvents(page);
+
+    await dispatchTouch(client, 'touchStart', [start]);
+    await dispatchTouch(client, 'touchMove', [{ ...start, x: start.x + 6 }]);
+    await endTouches(client);
+
+    const inspector = page.getByTestId('item-inspector');
+    await expect(inspector).toBeVisible();
+    await expect(inspector).toContainText(originalItem.title);
+    expectCameraClose(await readSceneCamera(page), cameraBefore);
+
+    const savedState = decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey));
+    const savedItem = savedState.items.find((entry) => entry.id === calibrationItemId);
+    expect(savedItem.position).toEqual(originalItem.position);
+    expect(savedItem.placement).toEqual(originalItem.placement);
+    expect(savedItem.validation).toEqual(originalItem.validation);
+    const audioEventTypes = await readAudioEventTypes(page);
+    expect(audioEventTypes.filter((type) => type === 'item.pickup' || type === 'item.drop'))
+      .toEqual([], 'a small touch drift should not start or complete an item drag');
+  });
+});
+
+test('a coarse-pointer drag files a card into its correct destination', async ({ browser }) => {
+  await withTouchLab(browser, { dragItem: true }, async ({ page, client, state }) => {
+    const item = page.getByTestId(`lab-item-${calibrationItemId}`);
+    const destination = page.getByTestId('destination-cabinet-calibration');
+    await expect(item).toBeVisible();
+    await expect(destination).toBeVisible();
+
+    const itemBounds = await item.boundingBox();
+    const destinationBounds = await destination.boundingBox();
+    expect(itemBounds).not.toBeNull();
+    expect(destinationBounds).not.toBeNull();
+
+    const start = {
+      id: 1,
+      x: itemBounds.x + itemBounds.width / 2,
+      y: itemBounds.y + itemBounds.height / 2,
+    };
+    const finish = {
+      x: destinationBounds.x + destinationBounds.width / 2,
+      y: destinationBounds.y + destinationBounds.height / 2,
+    };
+    const cameraBefore = await readSceneCamera(page);
+    await observeAudioEvents(page);
+
+    await dispatchTouch(client, 'touchStart', [start]);
+    const dragSteps = 8;
+    for (let step = 1; step <= dragSteps; step += 1) {
+      const progress = step / dragSteps;
+      await dispatchTouch(client, 'touchMove', [{
+        id: start.id,
+        x: start.x + (finish.x - start.x) * progress,
+        y: start.y + (finish.y - start.y) * progress,
+      }]);
+    }
+    await endTouches(client);
+
+    await expect(destination).toHaveAttribute('aria-label', /1 of 8 objects placed/i);
+    await expect(page.getByTestId('autosave-status')).toHaveText('Saved just now');
+    expectCameraClose(await readSceneCamera(page), cameraBefore);
+
+    const savedState = decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey));
+    const savedItem = savedState.items.find((entry) => entry.id === calibrationItemId);
+    expect(savedItem).toMatchObject({
+      placement: { kind: 'destination', destinationId: 'cabinet-calibration' },
+      validation: 'correct',
+    });
+    expect(await readAudioEventTypes(page)).toEqual([
+      'item.pickup',
+      'item.drop',
+      'item.placement.correct',
+    ]);
+
+    const originalItem = state.items.find((entry) => entry.id === calibrationItemId);
+    expect(savedItem.position).not.toEqual(originalItem.position);
   });
 });
 

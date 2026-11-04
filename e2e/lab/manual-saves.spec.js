@@ -17,6 +17,84 @@ async function openSaveDialog(page) {
   await expect(page.getByRole('dialog', { name: /save & restore/i })).toBeVisible();
 }
 
+async function waitForDialogLayoutToSettle(dialog) {
+  await dialog.evaluate(async (element) => {
+    const runningAnimations = element.getAnimations({ subtree: true })
+      .filter((animation) => animation.playState === 'running');
+    await Promise.all(runningAnimations.map((animation) => animation.finished.catch(() => {})));
+    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  });
+}
+
+async function expectFocusedControlVisible(dialog, control) {
+  await expect(control).toBeFocused();
+  const visibility = await dialog.evaluate((element) => {
+    const focused = document.activeElement;
+    const dialogRect = element.getBoundingClientRect();
+    const focusedRect = focused.getBoundingClientRect();
+    const dialogLeft = dialogRect.left + element.clientLeft;
+    const dialogTop = dialogRect.top + element.clientTop;
+    const dialogRight = dialogLeft + element.clientWidth;
+    const dialogBottom = dialogTop + element.clientHeight;
+    const tolerance = 1;
+    const hit = document.elementFromPoint(
+      focusedRect.left + focusedRect.width / 2,
+      focusedRect.top + focusedRect.height / 2,
+    );
+
+    return {
+      insideDialog: element.contains(focused),
+      fullRectVisible: focusedRect.left >= Math.max(0, dialogLeft) - tolerance
+        && focusedRect.right <= Math.min(window.innerWidth, dialogRight) + tolerance
+        && focusedRect.top >= Math.max(0, dialogTop) - tolerance
+        && focusedRect.bottom <= Math.min(window.innerHeight, dialogBottom) + tolerance,
+      hitTestable: hit === focused || focused.contains(hit),
+      dialogRect: {
+        left: dialogRect.left,
+        top: dialogRect.top,
+        right: dialogRect.right,
+        bottom: dialogRect.bottom,
+        clientHeight: element.clientHeight,
+        scrollTop: element.scrollTop,
+      },
+      focusedRect: {
+        left: focusedRect.left,
+        top: focusedRect.top,
+        right: focusedRect.right,
+        bottom: focusedRect.bottom,
+        width: focusedRect.width,
+        height: focusedRect.height,
+      },
+    };
+  });
+  expect(visibility.insideDialog, `focused control should remain in Save & Restore: ${JSON.stringify(visibility)}`).toBe(true);
+  expect(visibility.fullRectVisible, `focused control should be fully visible: ${JSON.stringify(visibility)}`).toBe(true);
+  expect(visibility.hitTestable, `focused control should be hit-testable: ${JSON.stringify(visibility)}`).toBe(true);
+}
+
+async function expectSaveDialogFitsViewport(dialog, viewport) {
+  const layout = await dialog.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      dialogInViewport: rect.left >= 0 && rect.right <= window.innerWidth
+        && rect.top >= 0 && rect.bottom <= window.innerHeight,
+      dialogHasHorizontalOverflow: element.scrollWidth > element.clientWidth + 1,
+      pageHasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth,
+      dialogScrollsVertically: element.scrollHeight > element.clientHeight,
+    };
+  });
+
+  expect(layout.dialogInViewport, `dialog should fit ${viewport.width}x${viewport.height}`).toBe(true);
+  expect(layout.dialogHasHorizontalOverflow, 'dialog content should not overflow horizontally').toBe(false);
+  expect(layout.pageHasHorizontalOverflow, 'page should not overflow horizontally').toBe(false);
+  expect(layout.dialogScrollsVertically, 'save dialog content should scroll vertically').toBe(true);
+}
+
+async function tabToControl(page, dialog, control) {
+  await page.keyboard.press('Tab');
+  await expectFocusedControlVisible(dialog, control);
+}
+
 test('Save & Restore recovers Tab focus when focus moves outside the dialog', async ({ page }) => {
   await page.goto('/');
   await openSaveDialog(page);
@@ -85,6 +163,98 @@ test('Save & Restore transfers focus into confirmations and returns it to the sl
   await expect(confirmDelete).toBeFocused();
   await confirmDelete.click();
   await expect(slot.getByRole('button', { name: 'Save to Slot 2', exact: true })).toBeFocused();
+});
+
+test('150% Save & Restore stays usable by keyboard at narrow mobile widths', async ({ page }) => {
+  const savedState = createNewGameState();
+  savedState.progress.skillPoints = 37;
+  const slotTwo = JSON.stringify({
+    version: 1,
+    slotId: 2,
+    savedAt: '2026-11-03T12:00:00.000Z',
+    encodedSave: encodeSave(savedState),
+  });
+  await page.addInitScript(({ preferencesKey, preferences, slotKey, slotValue }) => {
+    window.localStorage.setItem(preferencesKey, preferences);
+    window.localStorage.setItem(slotKey, slotValue);
+  }, {
+    preferencesKey: PREFERENCES_STORAGE_KEY,
+    preferences: JSON.stringify({ version: 1, textScale: 1.5, reduceMotion: false }),
+    slotKey: slotTwoKey,
+    slotValue: slotTwo,
+  });
+
+  for (const viewport of [
+    { width: 320, height: 360 },
+    { width: 320, height: 480 },
+    { width: 390, height: 480 },
+    { width: 320, height: 400 },
+    { width: 390, height: 400 },
+  ]) {
+    if (page.url() !== 'about:blank') {
+      await page.evaluate(() => window.localStorage.clear());
+    }
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    await waitForAutosave(page);
+
+    const textScale = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--text-scale').trim());
+    expect(textScale).toBe('1.5');
+    await openSaveDialog(page);
+
+    const dialog = page.getByRole('dialog', { name: /save & restore/i });
+    await waitForDialogLayoutToSettle(dialog);
+    await expectSaveDialogFitsViewport(dialog, viewport);
+    const initialFocus = dialog.getByRole('button', { name: 'Close save dialog' });
+    await expectFocusedControlVisible(dialog, initialFocus);
+
+    const exportField = page.getByTestId('save-export-string');
+    const copyButton = page.getByTestId('copy-save');
+    const slotOne = page.getByRole('region', { name: 'Slot 1' });
+    const slotTwoRegion = page.getByRole('region', { name: 'Slot 2' });
+    const slotThree = page.getByRole('region', { name: 'Slot 3' });
+    const overwriteSlotTwo = slotTwoRegion.getByRole('button', { name: 'Overwrite Slot 2', exact: true });
+    const restoreSlotTwo = slotTwoRegion.getByRole('button', { name: 'Restore Slot 2', exact: true });
+    const deleteSlotTwo = slotTwoRegion.getByRole('button', { name: 'Delete Slot 2', exact: true });
+    const importField = page.getByTestId('save-import-string');
+    const acknowledgement = page.getByRole('checkbox', { name: /valid import replaces the current laboratory/i });
+    const importButton = page.getByRole('button', { name: 'Validate & import save', exact: true });
+
+    for (const control of [
+      exportField,
+      copyButton,
+      slotOne.getByRole('button', { name: 'Save to Slot 1', exact: true }),
+      overwriteSlotTwo,
+      restoreSlotTwo,
+      deleteSlotTwo,
+      slotThree.getByRole('button', { name: 'Save to Slot 3', exact: true }),
+      importField,
+    ]) {
+      await tabToControl(page, dialog, control);
+    }
+
+    const dialogScrollTop = await dialog.evaluate((element) => element.scrollTop);
+    expect(dialogScrollTop, 'Tab navigation should scroll the dialog to its lower content').toBeGreaterThan(0);
+    await page.keyboard.type('x');
+    await tabToControl(page, dialog, acknowledgement);
+    await page.keyboard.press('Space');
+    await expect(acknowledgement).toBeChecked();
+    await tabToControl(page, dialog, importButton);
+    await expect(importButton).toBeEnabled();
+
+    await restoreSlotTwo.click();
+    const confirmRestore = slotTwoRegion.getByRole('button', { name: 'Confirm restore to Slot 2', exact: true });
+    await expectFocusedControlVisible(dialog, confirmRestore);
+    await page.keyboard.press('Escape');
+    await expectFocusedControlVisible(dialog, restoreSlotTwo);
+
+    await restoreSlotTwo.click();
+    await expectFocusedControlVisible(dialog, confirmRestore);
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('save-feedback')).toContainText('Slot 2 restored.');
+    await expectFocusedControlVisible(dialog, restoreSlotTwo);
+    await expect(page.getByTestId('skill-points')).toContainText('Skill points: 37');
+  }
 });
 
 test('a manual slot survives reload and restores with a pre-restore backup', async ({ page }) => {

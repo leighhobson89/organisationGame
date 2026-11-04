@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { createNewGameState } from '../../src/game/persistence/gameState.js';
-import { encodeSave } from '../../src/game/persistence/save.js';
+import { decodeSave, encodeSave } from '../../src/game/persistence/save.js';
 
 const autoSaveKey = 'palimpsest-laboratory.autosave.v1';
 const touchFixtureMarker = 'palimpsest-lab.zoom-announcements-fixture-seeded';
@@ -108,6 +108,17 @@ async function readSceneCamera(page) {
   });
 }
 
+async function readSavedCamera(page) {
+  const rawSave = await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey);
+  return decodeSave(rawSave).camera;
+}
+
+function expectCameraClose(actual, expected) {
+  expect(Math.abs(actual.panX - expected.panX), 'camera panX should persist within codec precision').toBeLessThanOrEqual(0.01);
+  expect(Math.abs(actual.panY - expected.panY), 'camera panY should persist within codec precision').toBeLessThanOrEqual(0.01);
+  expect(Math.abs(actual.scale - expected.scale), 'camera scale should persist within codec precision').toBeLessThanOrEqual(0.0001);
+}
+
 async function findEmptyTouchPair(page) {
   const pair = await page.getByTestId('world-viewport').evaluate((viewport) => {
     const bounds = viewport.getBoundingClientRect();
@@ -178,6 +189,8 @@ test('a real wheel zoom keeps an empty off-center pointer anchored to the same w
   await expect.poll(async () => (await readSceneCamera(page)).scale).not.toBe(cameraBefore.scale);
 
   const cameraAfter = await readSceneCamera(page);
+  expect(Math.abs(cameraAfter.scale - cameraBefore.scale * 1.12), 'a 120px wheel notch should retain the existing 12% zoom step')
+    .toBeLessThanOrEqual(0.001);
   const screenPointAfter = {
     x: anchoredWorldPoint.x * cameraAfter.scale + cameraAfter.panX,
     y: anchoredWorldPoint.y * cameraAfter.scale + cameraAfter.panY,
@@ -186,6 +199,107 @@ test('a real wheel zoom keeps an empty off-center pointer anchored to the same w
     .toBeLessThanOrEqual(1);
   expect(Math.abs(screenPointAfter.y - localPointer.y), 'wheel zoom should preserve the cursor world point vertically')
     .toBeLessThanOrEqual(1);
+});
+
+test('a real wheel zoom persists and restores the camera after reload', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await loadLab(page);
+
+  const point = await findEmptyPoint(page);
+  const cameraBefore = await readSceneCamera(page);
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.wheel(0, -120);
+
+  await expect.poll(async () => (await readSceneCamera(page)).scale).toBeGreaterThan(cameraBefore.scale);
+  await expectOneSettledAnnouncement(page);
+
+  await expect.poll(async () => {
+    const [saved, live] = await Promise.all([readSavedCamera(page), readSceneCamera(page)]);
+    return Math.abs(saved.panX - live.panX) <= 0.01
+      && Math.abs(saved.panY - live.panY) <= 0.01
+      && Math.abs(saved.scale - live.scale) <= 0.0001;
+  }).toBe(true);
+
+  const savedCamera = await readSavedCamera(page);
+  await page.reload();
+  await expect(page.getByTestId('autosave-status')).toHaveText('Saved just now', { timeout: 15_000 });
+  expectCameraClose(await readSceneCamera(page), savedCamera);
+});
+
+test('small pixel wheel deltas zoom smoothly while keeping the pointer anchored and announcing once', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await loadLab(page);
+
+  const viewport = page.getByTestId('world-viewport');
+  const point = await findEmptyPoint(page);
+  const viewportRect = await viewport.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+  });
+  const localPointer = { x: point.x - viewportRect.left, y: point.y - viewportRect.top };
+  const cameraBefore = await readSceneCamera(page);
+  const readout = page.locator('.zoom-readout');
+  const readoutBefore = await readout.innerText();
+  const anchoredWorldPoint = {
+    x: (localPointer.x - cameraBefore.panX) / cameraBefore.scale,
+    y: (localPointer.y - cameraBefore.panY) / cameraBefore.scale,
+  };
+
+  await viewport.evaluate((element, pointer) => {
+    for (let index = 0; index < 10; index += 1) {
+      element.dispatchEvent(new WheelEvent('wheel', {
+        bubbles: true,
+        cancelable: true,
+        clientX: pointer.x,
+        clientY: pointer.y,
+        deltaY: -2,
+        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+      }));
+    }
+  }, point);
+
+  await expect.poll(async () => (await readSceneCamera(page)).scale).toBeGreaterThan(cameraBefore.scale);
+  const cameraAfter = await readSceneCamera(page);
+  expect(cameraAfter.scale / cameraBefore.scale, 'small pixel deltas should produce a smooth aggregate zoom')
+    .toBeLessThan(1.05);
+  await expectOneSettledAnnouncement(page);
+  expect(await readout.innerText(), 'small pixel deltas should update the visible zoom readout')
+    .not.toBe(readoutBefore);
+
+  const screenPointAfter = {
+    x: anchoredWorldPoint.x * cameraAfter.scale + cameraAfter.panX,
+    y: anchoredWorldPoint.y * cameraAfter.scale + cameraAfter.panY,
+  };
+  expect(Math.abs(screenPointAfter.x - localPointer.x), 'pixel wheel zoom should preserve the cursor world point horizontally')
+    .toBeLessThanOrEqual(1);
+  expect(Math.abs(screenPointAfter.y - localPointer.y), 'pixel wheel zoom should preserve the cursor world point vertically')
+    .toBeLessThanOrEqual(1);
+});
+
+test('horizontal trackpad movement pans without changing zoom or announcing', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await loadLab(page);
+
+  const point = await findEmptyPoint(page);
+  const cameraBefore = await readSceneCamera(page);
+  const readout = page.locator('.zoom-readout');
+  const readoutBefore = await readout.innerText();
+
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.wheel(120, 0);
+  await expect.poll(async () => (await readSceneCamera(page)).panX)
+    .toBeLessThan(cameraBefore.panX);
+
+  await page.waitForTimeout(300);
+  const cameraAfter = await readSceneCamera(page);
+  expect(cameraAfter.panY, 'horizontal wheel input should preserve vertical pan')
+    .toBeCloseTo(cameraBefore.panY, 5);
+  expect(cameraAfter.scale, 'horizontal wheel input should preserve zoom scale')
+    .toBeCloseTo(cameraBefore.scale, 5);
+  await expect(readout, 'horizontal wheel input should preserve the zoom readout')
+    .toHaveText(readoutBefore);
+  expect(await readAnnouncements(page), 'horizontal wheel input should not announce a zoom change')
+    .toEqual([]);
 });
 
 test('rapid wheel zoom changes announce only the final settled percentage', async ({ page }) => {

@@ -11,7 +11,7 @@ export function SettingsDialog({ preferences, saveStatus, onChange, onPreviewSou
   useEffect(() => {
     const previousFocus = document.activeElement;
     const dialog = dialogRef.current;
-    const firstControl = dialog?.querySelector('select, input, button');
+    const firstControl = dialog?.querySelector('select, input');
     firstControl?.focus();
 
     const onKeyDown = (event) => {
@@ -29,6 +29,24 @@ export function SettingsDialog({ preferences, saveStatus, onChange, onPreviewSou
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, []);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const content = dialog?.querySelector('.settings-dialog__content');
+    const firstPreferenceField = dialog?.querySelector('select, input');
+    if (!content || !firstPreferenceField || document.activeElement !== firstPreferenceField) return;
+
+    const contentRect = content.getBoundingClientRect();
+    const visibleTop = contentRect.top + content.clientTop;
+    const visibleBottom = visibleTop + content.clientHeight;
+    const fieldRect = firstPreferenceField.getBoundingClientRect();
+
+    if (fieldRect.top < visibleTop) {
+      content.scrollTop -= visibleTop - fieldRect.top;
+    } else if (fieldRect.bottom > visibleBottom) {
+      content.scrollTop += fieldRect.bottom - visibleBottom;
+    }
+  }, [preferences.textScale]);
 
   const handlePreviewSound = async (event) => {
     if (!preferences.soundEffectsEnabled) return;
@@ -77,6 +95,7 @@ export function SettingsDialog({ preferences, saveStatus, onChange, onPreviewSou
               <option value="1">100%</option>
               <option value="1.125">112.5%</option>
               <option value="1.25">125%</option>
+              <option value="1.5">150%</option>
             </select>
           </div>
 

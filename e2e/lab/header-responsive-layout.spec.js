@@ -12,6 +12,10 @@ const scaledHeaderPreferences = {
   reduceMotion: false,
   soundEffectsEnabled: false,
 };
+const largeTextHeaderPreferences = {
+  ...scaledHeaderPreferences,
+  textScale: 1.5,
+};
 const puzzleButtonName = /Chronology of the Last Bell.*solved/i;
 const headerActions = [
   { testId: 'toggle-notebook', name: 'Notebook' },
@@ -90,7 +94,7 @@ async function assertNoOverlap(left, right, description) {
   expect(overlaps, description).toBe(false);
 }
 
-async function assertScaledHeaderGeometry(page, viewport) {
+async function assertScaledHeaderGeometry(page, viewport, textPercent = 125) {
   const header = page.locator('.game-header');
   const brand = page.locator('.game-brand');
   const progress = page.locator('.header-progress');
@@ -112,6 +116,7 @@ async function assertScaledHeaderGeometry(page, viewport) {
     scrollWidth: element.scrollWidth,
   }));
   expect(navMeasurement.scrollWidth, 'scaled header actions should not be clipped by the nav').toBeLessThanOrEqual(navMeasurement.clientWidth);
+  await assertNoOverlap(brand, nav, `scaled header brand must not overlap laboratory tools navigation at ${textPercent}% text`);
   await assertNoOverlap(brand, progress, 'scaled brand and restoration summary must not overlap');
 
   for (let firstIndex = 0; firstIndex < buttons.length; firstIndex += 1) {
@@ -128,6 +133,7 @@ async function assertScaledHeaderGeometry(page, viewport) {
       scrollWidth: element.scrollWidth,
     }));
     expect(labelMeasurement.scrollWidth, 'scaled header action label should be fully visible').toBeLessThanOrEqual(labelMeasurement.clientWidth);
+    await assertNoOverlap(brand, button, `scaled header brand must not overlap ${headerActions[firstIndex].testId} at ${textPercent}% text`);
     await assertNoOverlap(button, progress, `${headerActions[firstIndex].testId} must not overlap the scaled restoration summary`);
 
     for (let secondIndex = firstIndex + 1; secondIndex < buttons.length; secondIndex += 1) {
@@ -136,7 +142,7 @@ async function assertScaledHeaderGeometry(page, viewport) {
   }
 }
 
-async function assertScaledMobileHeaderReachability(page, viewport) {
+async function assertScaledMobileHeaderReachability(page, viewport, textPercent = 125) {
   const header = page.locator('.game-header');
   const nav = page.getByRole('navigation', { name: 'Laboratory tools' });
   const headerBox = await header.boundingBox();
@@ -178,8 +184,8 @@ async function assertScaledMobileHeaderReachability(page, viewport) {
     expect(buttonBox.x + buttonBox.width, `${action.testId} should be reachable within the viewport`).toBeLessThanOrEqual(visibleNavBox.x + visibleNavBox.width + 1);
     expect(buttonBox.y, `${action.testId} should stay inside the header`).toBeGreaterThanOrEqual(headerBox.y - 1);
     expect(buttonBox.y + buttonBox.height, `${action.testId} should stay inside the viewport`).toBeLessThanOrEqual(viewport.height + 1);
-    expect(labelMeasurement.scrollWidth, `${action.testId} label should not be clipped at 125%`).toBeLessThanOrEqual(labelMeasurement.clientWidth + 1);
-    expect(labelMeasurement.scrollHeight, `${action.testId} label should not be clipped at 125%`).toBeLessThanOrEqual(labelMeasurement.clientHeight + 1);
+    expect(labelMeasurement.scrollWidth, `${action.testId} label should not be clipped at ${textPercent}%`).toBeLessThanOrEqual(labelMeasurement.clientWidth + 1);
+    expect(labelMeasurement.scrollHeight, `${action.testId} label should not be clipped at ${textPercent}%`).toBeLessThanOrEqual(labelMeasurement.clientHeight + 1);
   }
 }
 
@@ -254,11 +260,16 @@ for (const viewport of [
   { width: 1341, height: 900 },
   { width: 1440, height: 900 },
 ]) {
-  test(`laboratory header remains readable with 125% text at ${viewport.width}px`, async ({ page }) => {
-    await loadHeaderFixture(page, viewport, scaledHeaderPreferences);
-    await expect(page.locator('html')).toHaveCSS('--text-scale', '1.25');
-    await assertScaledHeaderGeometry(page, viewport);
-  });
+  for (const [textPercent, preferences] of [
+    [125, scaledHeaderPreferences],
+    [150, largeTextHeaderPreferences],
+  ]) {
+    test(`laboratory header remains readable with ${textPercent}% text at ${viewport.width}px`, async ({ page }) => {
+      await loadHeaderFixture(page, viewport, preferences);
+      await expect(page.locator('html')).toHaveCSS('--text-scale', String(textPercent / 100));
+      await assertScaledHeaderGeometry(page, viewport, textPercent);
+    });
+  }
 }
 
 test('mobile laboratory header keeps all tools accessible in the existing scrollable row', async ({ page }) => {
@@ -290,9 +301,11 @@ for (const viewport of [
   { width: 320, height: 480 },
   { width: 390, height: 480 },
 ]) {
-  test(`all mobile header controls stay reachable without clipping at 125% text and ${viewport.width}px`, async ({ page }) => {
-    await loadHeaderFixture(page, viewport, scaledHeaderPreferences);
-    await expect(page.locator('html')).toHaveCSS('--text-scale', '1.25');
-    await assertScaledMobileHeaderReachability(page, viewport);
-  });
+  for (const [textPercent, preferences] of [[125, scaledHeaderPreferences], [150, largeTextHeaderPreferences]]) {
+    test(`all mobile header controls stay reachable without clipping at ${textPercent}% text and ${viewport.width}px`, async ({ page }) => {
+      await loadHeaderFixture(page, viewport, preferences);
+      await expect(page.locator('html')).toHaveCSS('--text-scale', String(textPercent / 100));
+      await assertScaledMobileHeaderReachability(page, viewport, textPercent);
+    });
+  }
 }

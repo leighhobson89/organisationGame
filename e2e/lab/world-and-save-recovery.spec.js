@@ -728,6 +728,29 @@ test('inspector capacity rejection keeps focus on Move and announces the result'
   await expect(page.getByTestId('game-feedback')).toContainText(/full|capacity|slot/i);
 });
 
+test('arrow keys pan only while the world viewport has focus', async ({ page }) => {
+  await page.goto('/');
+  await waitForAutosave(page);
+
+  const scene = page.locator('.world-scene');
+  const item = page.getByTestId(`lab-item-${calibrationCard}`);
+  await expect(item).toBeVisible();
+  const transformBeforeItemKey = await scene.evaluate((element) => element.style.transform);
+
+  await item.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(item).toBeFocused();
+  await expect.poll(() => scene.evaluate((element) => element.style.transform))
+    .toBe(transformBeforeItemKey);
+
+  const world = page.getByTestId('world-viewport');
+  await world.focus();
+  const transformBeforeWorldKey = await scene.evaluate((element) => element.style.transform);
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(() => scene.evaluate((element) => element.style.transform))
+    .not.toBe(transformBeforeWorldKey);
+});
+
 test('keyboard panning and zoom controls visibly update the laboratory view', async ({ page }) => {
   await page.goto('/');
 
@@ -816,6 +839,52 @@ test('rejected import leaves both current progress and autosave unchanged', asyn
 
   await expect(page.getByTestId('save-feedback')).toContainText(/destination|invalid|unknown|unchanged/i);
   await expect(page.getByTestId('destination-cabinet-calibration')).toHaveAttribute('aria-label', /0 of 8 objects placed/i);
+  const afterAutosave = await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey);
+  const afterBackup = await page.evaluate((key) => window.localStorage.getItem(key), backupKey);
+  expect(afterAutosave).toBe(beforeAutosave);
+  expect(afterBackup).toBe(beforeBackup);
+});
+
+test('backup failure rejects a valid import and preserves current progress and saves', async ({ page }) => {
+  const existingBackupState = createNewGameState();
+  existingBackupState.camera.panX = -612;
+  existingBackupState.camera.panY = -180;
+  existingBackupState.camera.scale = 0.76;
+  const existingBackup = encodeSave(existingBackupState);
+  await page.addInitScript(({ key, value }) => {
+    window.localStorage.setItem(key, value);
+    const originalSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (storageKey, storageValue) {
+      if (storageKey === key) {
+        throw new DOMException('The pre-import backup could not be written.', 'QuotaExceededError');
+      }
+      return originalSetItem.call(this, storageKey, storageValue);
+    };
+  }, { key: backupKey, value: existingBackup });
+
+  await page.goto('/');
+  await waitForAutosave(page);
+  await page.getByTestId('open-saves').click();
+  const validImport = await page.getByTestId('save-export-string').inputValue();
+  await page.getByRole('button', { name: 'Close save dialog' }).click();
+
+  await moveWithInspector(page, calibrationCard, 'cabinet-calibration');
+  await waitForAutosave(page);
+  await page.getByTestId('open-saves').click();
+  const currentExport = await page.getByTestId('save-export-string').inputValue();
+  const beforeAutosave = await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey);
+  const beforeBackup = await page.evaluate((key) => window.localStorage.getItem(key), backupKey);
+  expect(currentExport).not.toBe(validImport);
+  expect(beforeAutosave).not.toBeNull();
+  expect(beforeBackup).toBe(existingBackup);
+
+  await page.getByTestId('save-import-string').fill(validImport);
+  await page.getByRole('checkbox', { name: /valid import replaces the current laboratory/i }).check();
+  await page.getByRole('button', { name: 'Validate & import save' }).click();
+
+  await expect(page.getByTestId('save-feedback')).toContainText(/could not be backed up/i);
+  await expect(page.getByTestId('destination-cabinet-calibration')).toHaveAttribute('aria-label', /1 of 8 objects placed/i);
+  await expect(page.getByTestId('save-export-string')).toHaveValue(currentExport);
   const afterAutosave = await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey);
   const afterBackup = await page.evaluate((key) => window.localStorage.getItem(key), backupKey);
   expect(afterAutosave).toBe(beforeAutosave);

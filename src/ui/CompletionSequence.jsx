@@ -62,7 +62,7 @@ export function CompletionSequence({ stats, onContinue, userReducedMotion = fals
             The Engine reads residual impressions from objects and reconstructs them as a luminous spatial replay. It replayed an impression left by the Chaos Event: the Engine was a witness, not its cause. Professor and Elian were witnesses as well.
           </p>
           <p className="completion-sequence__narrative">
-            The Professor chose to keep the Engine recording through an unstable echo so their account of what they witnessed would survive. His unsent apology points to that choice.
+            The unsent apology says the Professor feared Elian would blame the machine for a choice he made. The recovered records do not name that choice or establish whether that choice was connected to the Chaos Event.
           </p>
           <p className="completion-sequence__uncertainty">
             The recovered records do not establish what began the Chaos Event, and they leave Elian's response unresolved.

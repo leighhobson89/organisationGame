@@ -50,8 +50,15 @@ export function ItemFinder({ items, onSelectItem, onClose }) {
     setAnnouncement(`Page ${boundedPage + 1} of ${pageCount}. ${matchingCountMessage(filteredItems.length)}.`);
   };
 
+  const handleKeyDown = (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    event.stopPropagation();
+    onClose();
+  };
+
   return (
-    <section className="world-item-finder" role="search" aria-label="Find a laboratory item">
+    <section className="world-item-finder" role="search" aria-label="Find a laboratory item" onKeyDown={handleKeyDown}>
       <header className="item-finder-heading">
         <h2>Find an item</h2>
         <button type="button" className="panel-close" aria-label="Close item finder" onClick={onClose}>×</button>

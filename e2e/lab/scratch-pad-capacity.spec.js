@@ -69,6 +69,26 @@ async function loadFixture(page, state) {
   await expect(page.getByTestId('autosave-status')).toHaveText('Saved just now');
 }
 
+test('scratch pad jump keeps the full pad inside a compact viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 480 });
+  await page.addInitScript(() => window.localStorage.clear());
+  await page.goto('/');
+
+  const viewport = page.getByTestId('world-viewport');
+  await expect(viewport).toBeVisible();
+  const pad = await openScratchPad(page);
+  await expect(pad).toBeVisible();
+
+  const viewportBox = await viewport.boundingBox();
+  const padBox = await pad.boundingBox();
+  expect(viewportBox, 'the world viewport should have measurable bounds').not.toBeNull();
+  expect(padBox, 'the scratch pad should have measurable bounds').not.toBeNull();
+  expect(padBox.x).toBeGreaterThanOrEqual(viewportBox.x - 1);
+  expect(padBox.y).toBeGreaterThanOrEqual(viewportBox.y - 1);
+  expect(padBox.x + padBox.width).toBeLessThanOrEqual(viewportBox.x + viewportBox.width + 1);
+  expect(padBox.y + padBox.height).toBeLessThanOrEqual(viewportBox.y + viewportBox.height + 1);
+});
+
 test('Modular Worktables expands both scratch pads and preserves a new slot through reload', async ({ page }) => {
   const state = createFullScratchPadState({ skillPoints: 1 });
   await loadFixture(page, state);
@@ -130,7 +150,7 @@ test('a full unupgraded scratch pad retains its 24-slot limit', async ({ page })
   await expect(pad).toContainText(/24\s*\/\s*24 spaces/i);
 
   await moveAddedItemToScratchPad(page);
-  await expect(page.getByRole('status')).toContainText(/target is full|move an object out/i);
+  await expect(page.getByTestId('game-feedback')).toContainText(/target is full|move an object out/i);
   await expect(pad).toHaveAttribute('aria-label', /24 of 24 spaces used/i);
 
   const saved = decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey));

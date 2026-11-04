@@ -58,6 +58,21 @@ async function waitForRenderedStatus(page) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
+test('Escape closes Finder, restores focus to its opener, and leaves the camera unchanged', async ({ page }) => {
+  const { finder } = await loadFinder(page);
+  const search = finder.getByRole('searchbox', { name: 'Search laboratory items' });
+  const scene = page.locator('.world-scene');
+
+  await expect(search).toBeFocused();
+  const cameraTransform = await scene.evaluate((element) => element.style.transform);
+
+  await search.press('Escape');
+
+  await expect(finder).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Find an item', exact: true })).toBeFocused();
+  expect(await scene.evaluate((element) => element.style.transform)).toBe(cameraTransform);
+});
+
 test('Finder count and page readouts are not live, with one initially empty polite status', async ({ page }) => {
   const { finder } = await loadFinder(page);
 
