@@ -152,11 +152,16 @@ function normalizeItem(rawItem, itemIds, {
   const validation = placement.kind === 'destination'
     ? validateDrop(canonical, { kind: 'destination', id: placement.destinationId }).status
     : 'unchecked';
+  const usesCanonicalCalibrationCopy = canonical.collectionId === 'harmonic-calibration';
 
   return {
     ...canonical,
-    title: typeof rawItem.title === 'string' && rawItem.title.length <= 240 ? rawItem.title : canonical.title,
-    clue: typeof rawItem.clue === 'string' && rawItem.clue.length <= 1000 ? rawItem.clue : canonical.clue,
+    title: usesCanonicalCalibrationCopy
+      ? canonical.title
+      : typeof rawItem.title === 'string' && rawItem.title.length <= 240 ? rawItem.title : canonical.title,
+    clue: usesCanonicalCalibrationCopy
+      ? canonical.clue
+      : typeof rawItem.clue === 'string' && rawItem.clue.length <= 1000 ? rawItem.clue : canonical.clue,
     mark: typeof rawItem.mark === 'string' && rawItem.mark.length <= 32 ? rawItem.mark : canonical.mark,
     position,
     placement,

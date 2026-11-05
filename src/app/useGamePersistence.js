@@ -102,6 +102,66 @@ export function useGamePersistence() {
     return result;
   }, [game, updateGame]);
 
+  const startNewGame = useCallback((beforeApply = () => {}) => {
+    if (!autosaveEnabled) {
+      return {
+        ok: false,
+        state: game,
+        error: 'Autosave is paused while this laboratory needs recovery. Use the Start fresh laboratory action before starting over.',
+      };
+    }
+
+    let freshState;
+    let freshSave;
+    let storage;
+    let previousAutosave = null;
+    let commitStep = 'backup';
+
+    try {
+      freshState = createNewGameState();
+      const previousSave = encodeSave(game);
+      freshSave = encodeSave(freshState);
+      storage = window.localStorage;
+      previousAutosave = storage.getItem(AUTO_SAVE_KEY);
+      storage.setItem(BACKUP_SAVE_KEY, previousSave);
+      if (storage.getItem(BACKUP_SAVE_KEY) !== previousSave) {
+        throw new Error('The current laboratory backup could not be verified.');
+      }
+
+      commitStep = 'fresh-save';
+      storage.setItem(AUTO_SAVE_KEY, freshSave);
+      if (storage.getItem(AUTO_SAVE_KEY) !== freshSave) {
+        throw new Error('The new laboratory save could not be verified.');
+      }
+    } catch {
+      if (commitStep === 'fresh-save' && storage) {
+        try {
+          if (previousAutosave === null) storage.removeItem(AUTO_SAVE_KEY);
+          else storage.setItem(AUTO_SAVE_KEY, previousAutosave);
+        } catch {
+          // A failed replacement must not prevent the live game from staying open.
+        }
+      }
+      return {
+        ok: false,
+        state: game,
+        error: commitStep === 'backup'
+          ? 'Start Over was canceled because the current laboratory could not be backed up. Your progress and manual save slots are unchanged.'
+          : 'The new laboratory could not be saved, so the current laboratory remains open. A backup of your progress was kept; manual save slots are unchanged.',
+      };
+    }
+
+    autosaveCoordinatorRef.current?.invalidate();
+    beforeApply(freshState);
+    setGame(freshState);
+    setAutosaveEnabled(true);
+    setCanStartFresh(false);
+    setRecoveryNotice(null);
+    setSaveText(freshSave);
+    setSaveStatus('Saved just now');
+    return { ok: true, state: freshState };
+  }, [autosaveEnabled, game]);
+
   const startFresh = useCallback(() => {
     if (!canStartFresh) return false;
     setAutosaveEnabled(true);
@@ -122,6 +182,7 @@ export function useGamePersistence() {
     saveText,
     openSaveDialog,
     importGame,
+    startNewGame,
     startFresh,
     dismissRecoveryNotice,
   };

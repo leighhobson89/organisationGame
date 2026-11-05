@@ -38,13 +38,14 @@ function isStored(slot) {
   return slot.status === 'saved' || slot.status === 'corrupt';
 }
 
-export function SaveDialog({ encodedSave, saveStatus, onClose, onImport }) {
+export function SaveDialog({ encodedSave, saveStatus, onClose, onImport, onStartNewGame }) {
   const [importText, setImportText] = useState('');
   const [replaceAcknowledged, setReplaceAcknowledged] = useState(false);
   const [feedback, setFeedback] = useState('');
   const [slots, setSlots] = useState(readSlotsSafely);
   const [pendingAction, setPendingAction] = useState(null);
   const dialogRef = useRef(null);
+  const startNewLaboratoryButtonRef = useRef(null);
   const onCloseRef = useRef(onClose);
   const pendingActionRef = useRef(pendingAction);
 
@@ -81,9 +82,13 @@ export function SaveDialog({ encodedSave, saveStatus, onClose, onImport }) {
   };
 
   const cancelPendingAction = () => {
-    const { slotId, triggerAction } = pendingActionRef.current ?? {};
+    const { type, slotId, triggerAction } = pendingActionRef.current ?? {};
     clearPendingAction();
-    if (slotId) focusSlotAction(slotId, triggerAction || 'overwrite');
+    if (type === 'start-over') {
+      requestAnimationFrame(() => startNewLaboratoryButtonRef.current?.focus());
+    } else if (slotId) {
+      focusSlotAction(slotId, triggerAction || 'overwrite');
+    }
   };
 
   useEffect(() => {
@@ -190,6 +195,18 @@ export function SaveDialog({ encodedSave, saveStatus, onClose, onImport }) {
     } else {
       setFeedback(result?.error ?? 'That save could not be imported. Your current progress is unchanged.');
     }
+  };
+
+  const confirmStartOver = () => {
+    const result = onStartNewGame?.();
+    clearPendingAction();
+    if (result?.ok) {
+      onClose();
+      return;
+    }
+    setFeedback(result?.error ?? 'The new laboratory could not be started. Your current progress is unchanged.');
+    refreshSlots();
+    requestAnimationFrame(() => startNewLaboratoryButtonRef.current?.focus());
   };
 
   const confirmationFor = (slot) => {
@@ -310,6 +327,30 @@ export function SaveDialog({ encodedSave, saveStatus, onClose, onImport }) {
           <button type="button" className="panel-close" aria-label="Close save dialog" onClick={onClose}>×</button>
         </header>
         <p className="save-status-line" role="status">Autosave: {saveStatus}</p>
+
+        <section className="save-section start-over-section" aria-labelledby="start-over-title">
+          <h3 id="start-over-title">Start a new laboratory</h3>
+          <p>Start again with a fresh laboratory. Your current progress is backed up first, and your three manual save slots stay unchanged.</p>
+          <button
+            ref={startNewLaboratoryButtonRef}
+            type="button"
+            className="text-control"
+            data-testid="start-over"
+            onClick={() => {
+              setFeedback('');
+              beginPendingAction('start-over', null, 'start-over');
+            }}
+          >
+            Start Over
+          </button>
+          {pendingAction?.type === 'start-over' && (
+            <div className="manual-save-slot__confirmation" role="group" aria-label="Confirm Start Over">
+              <p>Replace the current autosave with a fresh 174-item laboratory? The current progress becomes the latest backup; manual save slots remain available.</p>
+              <button type="button" className="primary-control" onClick={confirmStartOver}>Confirm Start Over</button>
+              <button type="button" className="text-control" onClick={cancelPendingAction}>Cancel</button>
+            </div>
+          )}
+        </section>
 
         <section className="save-section">
           <h3>Export your laboratory</h3>

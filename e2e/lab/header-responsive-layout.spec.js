@@ -23,6 +23,7 @@ const extraLargeTextHeaderPreferences = {
 const puzzleButtonName = /Chronology of the Last Bell.*solved/i;
 const headerActions = [
   { testId: 'toggle-notebook', name: 'Notebook' },
+  { testId: 'open-how-to-play', name: 'How to Play' },
   { testId: 'toggle-skills', name: 'Instruments' },
   { testId: 'open-puzzle', name: puzzleButtonName },
   { testId: 'open-saves', name: 'Save & restore' },
@@ -390,8 +391,8 @@ test('standalone header keeps all tools reachable at 200% text on a 320x360 view
   expect(navBox.y, 'navigation should stay inside the header').toBeGreaterThanOrEqual(headerBox.y - 1);
   expect(navBox.y + navBox.height, 'navigation should stay inside the header').toBeLessThanOrEqual(headerBox.y + headerBox.height + 1);
   expect(documentWidth, 'standalone header should not create page-level horizontal overflow').toBeLessThanOrEqual(viewport.width);
-  expect(navMetrics.overflowX, 'navigation should scroll horizontally for the five completed-game actions').toBe('auto');
-  expect(navMetrics.scrollWidth, 'the five actions should exercise horizontal navigation scrolling').toBeGreaterThan(navMetrics.clientWidth);
+  expect(navMetrics.overflowX, 'navigation should scroll horizontally for the six completed-game actions').toBe('auto');
+  expect(navMetrics.scrollWidth, 'the six actions should exercise horizontal navigation scrolling').toBeGreaterThan(navMetrics.clientWidth);
 
   const initialScrollLeft = navMetrics.scrollLeft;
   let navigationScrolled = false;
@@ -465,6 +466,7 @@ test('default-text header controls fit at 320x360 without clipped navigation or 
 
     const defaultHeaderActions = [
       { testId: 'toggle-notebook', name: 'Notebook' },
+      { testId: 'open-how-to-play', name: 'How to Play' },
       { testId: 'toggle-skills', name: 'Instruments' },
       { testId: 'open-saves', name: 'Save & restore' },
       { testId: 'open-settings', name: 'Settings' },

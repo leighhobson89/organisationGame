@@ -9,6 +9,7 @@ export const DESTINATIONS = Object.freeze([
   {
     id: 'cabinet-calibration',
     label: 'Harmonic Calibration Folio',
+    contentsLabel: 'Eight marked resonance plates',
     family: 'blueprint-fragment',
     collectionId: 'harmonic-calibration',
     position: Object.freeze({ x: 540, y: 170 }),
@@ -20,6 +21,7 @@ export const DESTINATIONS = Object.freeze([
   {
     id: 'cabinet-blueprints',
     label: 'Blueprint Cabinet',
+    contentsLabel: 'Loose plans and mechanical diagrams',
     family: 'blueprint-fragment',
     position: Object.freeze({ x: 1500, y: 2640 }),
     width: 640,
@@ -30,6 +32,7 @@ export const DESTINATIONS = Object.freeze([
   {
     id: 'drawer-field-notes',
     label: 'Field Note Drawer',
+    contentsLabel: 'Letters, field notes, and marginalia',
     family: 'handwritten-note',
     position: Object.freeze({ x: 2180, y: 2640 }),
     width: 640,
@@ -40,6 +43,7 @@ export const DESTINATIONS = Object.freeze([
   {
     id: 'bin-clockwork',
     label: 'Clockwork Parts Bin',
+    contentsLabel: 'Gears, ratchets, and clockwork parts',
     family: 'gear',
     position: Object.freeze({ x: 2860, y: 2640 }),
     width: 640,
@@ -50,6 +54,7 @@ export const DESTINATIONS = Object.freeze([
   {
     id: 'archive-experiments',
     label: 'Experiment Record Archive',
+    contentsLabel: 'Trial logs and observation records',
     family: 'experiment-record',
     position: Object.freeze({ x: 3540, y: 2640 }),
     width: 640,
@@ -60,6 +65,7 @@ export const DESTINATIONS = Object.freeze([
   {
     id: 'case-bell-before-dawn',
     label: 'Bell Before Dawn Case',
+    contentsLabel: 'Letters, trials, maps, and formulae about the bell',
     family: 'research-record',
     collectionId: 'bell-before-dawn',
     position: Object.freeze({ x: 2940, y: 340 }),
@@ -71,6 +77,7 @@ export const DESTINATIONS = Object.freeze([
   {
     id: 'case-meridian-survey',
     label: 'Meridian Survey Case',
+    contentsLabel: 'Survey notes, bearings, maps, and readings',
     family: 'research-record',
     collectionId: 'meridian-survey',
     position: Object.freeze({ x: 3630, y: 340 }),
@@ -82,6 +89,7 @@ export const DESTINATIONS = Object.freeze([
   {
     id: 'case-parallax-trials',
     label: 'Parallax Trial Case',
+    contentsLabel: 'Parallax notes, trials, maps, and calculations',
     family: 'research-record',
     collectionId: 'parallax-trials',
     position: Object.freeze({ x: 4320, y: 340 }),
@@ -183,7 +191,7 @@ export const COLLECTIONS = Object.freeze([
     destinationId: 'cabinet-calibration',
     puzzleId: 'pulse-sequence',
     skillPointReward: 1,
-    description: 'Eight tuning diagrams from the Professor’s unfinished resonance trials.',
+    description: 'Eight engraved tuning plates from the Professor’s unfinished resonance trials. A split-gold seal links each plate to this Folio.',
   },
   ...chapterCollectionDefinitions.map((entry) => Object.freeze({
     id: entry.id,

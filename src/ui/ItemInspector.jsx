@@ -1,6 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
-export function ItemInspector({ item, selectedItems = [], destinations, scratchPads, focusMoveItemId, onClose, onFocus, onMove }) {
+const FAMILY_LABELS = Object.freeze({
+  'blueprint-fragment': 'Blueprint',
+  'handwritten-note': 'Handwritten note',
+  gear: 'Clockwork part',
+  'experiment-record': 'Experiment record',
+  'map-fragment': 'Map fragment',
+  'formula-card': 'Formula card',
+  'research-record': 'Research record',
+});
+
+function itemTypeLabel(item) {
+  if (item?.collectionId === 'harmonic-calibration') return 'Resonance tuning plate';
+  return FAMILY_LABELS[item?.family] ?? 'Laboratory object';
+}
+
+export function ItemInspector({ item, selectedItems = [], collections = [], destinations, scratchPads, focusMoveItemId, onClose, onFocus, onMove }) {
+  const collectionLabels = useMemo(() => new Map(collections.map((collection) => [collection.id, collection.label])), [collections]);
   const targets = useMemo(() => [
     { key: 'workspace', kind: 'workspace', id: 'workspace', label: 'Loose in the laboratory' },
     ...scratchPads.map((pad) => ({ key: `scratchpad:${pad.id}`, kind: 'scratchpad', id: pad.id, label: `Scratch pad · ${pad.label}` })),
@@ -12,6 +28,10 @@ export function ItemInspector({ item, selectedItems = [], destinations, scratchP
   const selectedIdSignature = selectedItems.map((selectedItem) => selectedItem.id).join('|');
   const isGroupSelection = selectedItems.length > 0;
   const selectedCount = selectedItems.length;
+  const sharedCollectionId = isGroupSelection && selectedItems.every((selectedItem) => selectedItem.collectionId === selectedItems[0].collectionId)
+    ? selectedItems[0].collectionId
+    : null;
+  const sharedCollectionLabel = collectionLabels.get(sharedCollectionId);
   const selectedObjectLabel = selectedCount === 1 ? 'object' : 'objects';
   const selectedItemLabel = selectedCount === 1 ? 'item' : 'items';
 
@@ -91,6 +111,7 @@ export function ItemInspector({ item, selectedItems = [], destinations, scratchP
           onKeyDown={handleEvidenceKeyDown}
         >
           <p>{selectedCount} {selectedObjectLabel} {selectedCount === 1 ? 'is' : 'are'} selected. Each object will be checked against the destination separately.</p>
+          {sharedCollectionLabel && <p className="selected-items-series"><strong>Series:</strong> {sharedCollectionLabel}</p>}
           <ul className="selected-item-list">
             {selectedItems.map((selectedItem) => (
               <li key={selectedItem.id}>
@@ -98,8 +119,14 @@ export function ItemInspector({ item, selectedItems = [], destinations, scratchP
                 <dl className="selected-item-evidence">
                   <div>
                     <dt>Family</dt>
-                    <dd className="selected-item-family">{selectedItem.family ?? 'Unknown family'}</dd>
+                    <dd className="selected-item-family">{itemTypeLabel(selectedItem)}</dd>
                   </div>
+                  {!sharedCollectionLabel && collectionLabels.has(selectedItem.collectionId) && (
+                    <div>
+                      <dt>Series</dt>
+                      <dd className="selected-item-series">{collectionLabels.get(selectedItem.collectionId)}</dd>
+                    </div>
+                  )}
                   <div>
                     <dt>Clue</dt>
                     <dd className="selected-item-clue">{selectedItem.clue ?? 'No notes have been recorded for this object yet.'}</dd>
@@ -112,7 +139,8 @@ export function ItemInspector({ item, selectedItems = [], destinations, scratchP
         </div>
       ) : <div className="item-inspector__details">
         <div className="inspector-art" aria-hidden="true"><span>{item.mark ?? '✧'}</span></div>
-        <p className="item-family">{item.family ?? 'Unknown family'}</p>
+        <p className="item-family">{itemTypeLabel(item)}</p>
+        {collectionLabels.has(item.collectionId) && <p className="item-series" data-testid="item-series"><strong>Series:</strong> {collectionLabels.get(item.collectionId)}</p>}
         <p className="item-clue">“{item.clue ?? 'No notes have been recorded for this object yet.'}”</p>
         {isInvalid && <p className="misfiled-message" role="status">⚠ Misfiled — this object is still here. Move it somewhere else to correct the record.</p>}
         {item.validation === 'correct' && <p className="correct-message" role="status">✓ Correctly catalogued.</p>}

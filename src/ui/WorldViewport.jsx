@@ -953,6 +953,7 @@ export const WorldViewport = forwardRef(function WorldViewport({
             <DestinationCard
               key={destination.id}
               destination={destination}
+              collection={collection}
               placedCount={destinationCounts.get(destination.id) ?? 0}
               complete={Boolean(complete)}
               guided={destination.id === guidedDestinationId}
@@ -1059,7 +1060,7 @@ export const WorldViewport = forwardRef(function WorldViewport({
           </>
           : compactLargeTextGuidance && showCalibrationLead ? (
             <aside className="world-hint">
-              <span className="world-hint__lead">Start with Harmonic Calibration: select a blueprint to inspect its clue, then file it in the Harmonic Calibration Folio.</span>
+              <span className="world-hint__lead">Start with the eight tuning plates. Select one to read its clue and series, then file it in the Harmonic Calibration Folio. Slots fill automatically; any order is fine.</span>
               <details className="world-hint__details">
                 <summary>Controls and keyboard help</summary>
                 <div className="world-hint__details-copy">{standardControlsGuidance}</div>
@@ -1067,7 +1068,7 @@ export const WorldViewport = forwardRef(function WorldViewport({
             </aside>
           ) : (
             <p className="world-hint">
-            {showCalibrationLead && <span className="world-hint__lead">Start with Harmonic Calibration: select a blueprint to inspect its clue, then file it in the Harmonic Calibration Folio.</span>}
+            {showCalibrationLead && <span className="world-hint__lead">Start with the eight tuning plates. Select one to read its clue and series, then file it in the Harmonic Calibration Folio. Slots fill automatically; any order is fine.</span>}
               {standardControlsGuidance}
             </p>
           )}

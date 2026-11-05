@@ -12,6 +12,7 @@ import { loadPreferences, normalizePreferences, savePreferences } from '../game/
 import { CompletionSequence } from '../ui/CompletionSequence.jsx';
 import { EMPTY_HIGHLIGHTED_ITEM_IDS } from '../ui/highlightedItemIds.js';
 import { ItemInspector } from '../ui/ItemInspector.jsx';
+import { HowToPlayDialog } from '../ui/HowToPlayDialog.jsx';
 import { NotebookPanel } from '../ui/NotebookPanel.jsx';
 import { PuzzlePanel } from '../ui/PuzzlePanel.jsx';
 import { SaveDialog } from '../ui/SaveDialog.jsx';
@@ -73,6 +74,7 @@ export default function App() {
     saveText,
     openSaveDialog: prepareSaveText,
     importGame,
+    startNewGame,
     startFresh,
     dismissRecoveryNotice,
   } = useGamePersistence();
@@ -82,6 +84,7 @@ export default function App() {
   const [completionOpen, setCompletionOpen] = useState(false);
   const [preferences, setPreferences] = useState(() => loadPreferences());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [howToPlayOpen, setHowToPlayOpen] = useState(false);
   const [preferencesStatus, setPreferencesStatus] = useState('');
   const [keyboardFocusItemId, setKeyboardFocusItemId] = useState(null);
   const [activeLeftPanel, setActiveLeftPanel] = useState(null);
@@ -91,6 +94,7 @@ export default function App() {
   const [isMediumShortDesktop, setIsMediumShortDesktop] = useState(isMediumShortDesktopViewport);
   const [isWideShortDesktop, setIsWideShortDesktop] = useState(isWideShortDesktopViewport);
   const [saveOpen, setSaveOpen] = useState(false);
+  const [laboratoryGeneration, setLaboratoryGeneration] = useState(0);
   const [toast, setToast] = useState('');
   const [lensActive, setLensActive] = useState(false);
   const [lensMessage, setLensMessage] = useState('');
@@ -726,6 +730,41 @@ export default function App() {
     setToast('Autosave is enabled for this fresh laboratory. The damaged save remains in recovery storage.');
   };
 
+  const handleStartNewGame = () => {
+    const result = startNewGame(() => {
+      suppressCompletionAudioRef.current = false;
+      previousCompletionRef.current = false;
+      setSelectedItemId(null);
+      setSelectedItemIds([]);
+      setMultiSelectionMode(false);
+      setCompletionOpen(false);
+      setHowToPlayOpen(false);
+      setLensActive(false);
+      setLensMessage('');
+      setMissingMemberId(null);
+      setGuidedDestination(null);
+      setActivePuzzleId(null);
+      setActiveLeftPanel(null);
+      setActiveRightPanel(null);
+      setKeyboardFocusItemId(null);
+      setLaboratoryGeneration((generation) => generation + 1);
+    });
+    if (!result.ok) return result;
+    setToast('New laboratory started. Your previous progress is backed up; manual save slots are unchanged.');
+    return result;
+  };
+
+  const handleBeginFirstTask = () => {
+    setHowToPlayOpen(false);
+    const firstItem = game.items.find((item) => item.id === 'calibration-card-01');
+    if (!firstItem) return;
+    worldRef.current?.focusItem(firstItem);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => worldRef.current?.focusItemControl([firstItem.id]));
+    });
+    setToast('First task: inspect the Carrier Tone Plate, then file it in the Harmonic Calibration Folio.');
+  };
+
   const focusCollection = (collection) => {
     const destination = DESTINATIONS.find((entry) => entry.id === collection.destinationId);
     setActiveLeftPanel(null);
@@ -811,6 +850,10 @@ export default function App() {
             setActiveLeftPanel(openingNotebook ? 'notebook' : null);
             if (openingNotebook && isCompact) setActiveRightPanel(null);
           }}>Notebook</button>
+          <button type="button" className="header-control" data-testid="open-how-to-play" aria-label="How to Play" title="How to Play" onClick={() => setHowToPlayOpen(true)}>
+            <span className="header-control__help-full">How to Play</span>
+            <span className="header-control__help-compact" aria-hidden="true">Help</span>
+          </button>
           <button type="button" className="header-control" data-testid="toggle-skills" aria-pressed={activeLeftPanel === 'skills'} onClick={() => {
             const openingSkills = activeLeftPanel !== 'skills';
             setActiveLeftPanel(openingSkills ? 'skills' : null);
@@ -842,6 +885,7 @@ export default function App() {
         {activeLeftPanel === 'notebook' && <NotebookPanel collections={COLLECTIONS} items={game.items} progress={progress} discoveries={game.notebook?.discoveries ?? []} discoveryEntries={NOTEBOOK_DISCOVERIES} onFocusCollection={focusCollection} />}
         {activeLeftPanel === 'skills' && <SkillsPanel progress={progress} activeSkillIds={activeSkillIds} canUseSkills={canUseSkills} onPurchaseSkill={handlePurchaseSkill} onToggleSkill={handleToggleSkill} />}
         <WorldViewport
+          key={laboratoryGeneration}
           ref={worldRef}
           overlayRoot={worldOverlayHost}
           items={game.items}
@@ -881,6 +925,7 @@ export default function App() {
           <ItemInspector
             item={selectedItem}
             selectedItems={selectedItemIds.map((itemId) => game.items.find((item) => item.id === itemId)).filter(Boolean)}
+            collections={COLLECTIONS}
             destinations={DESTINATIONS}
             scratchPads={scratchPads}
             focusMoveItemId={keyboardFocusItemId}
@@ -904,6 +949,13 @@ export default function App() {
           saveStatus={saveStatus}
           onClose={() => setSaveOpen(false)}
           onImport={handleImportSave}
+          onStartNewGame={handleStartNewGame}
+        />
+      )}
+      {howToPlayOpen && (
+        <HowToPlayDialog
+          onClose={() => setHowToPlayOpen(false)}
+          onBeginFirstTask={handleBeginFirstTask}
         />
       )}
       {settingsOpen && (

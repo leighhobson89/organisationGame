@@ -753,7 +753,7 @@ test('200% group Inspector keeps all eight evidence rows reachable by keyboard a
   for (const item of calibrationItems) {
     const row = rows.filter({ has: page.getByText(item.title, { exact: true }) });
     await expect(row).toHaveCount(1);
-    await expect(row.locator('.selected-item-family')).toHaveText(item.family);
+    await expect(row.locator('.selected-item-family')).toHaveText('Resonance tuning plate');
     await expect(row.locator('.selected-item-clue')).toHaveText(item.clue);
   }
 
@@ -893,7 +893,7 @@ for (const viewport of [
       if (textScale === 1.5) {
         expect.soft(measurement.details.clientHeight, '150% Inspector details should retain at least 48px of scrollable space').toBeGreaterThanOrEqual(48);
       }
-      await expect(panel.getByRole('heading', { level: 2 })).toHaveText(/Harmonic Calibration 01/i);
+      await expect(panel.getByRole('heading', { level: 2 })).toHaveText('Carrier Tone Plate');
       await expectCompactInspectorActions(page, panel);
 
       const details = panel.locator('.item-inspector__details');
@@ -1052,7 +1052,7 @@ test('short-height resize across 400, 440, and 480 preserves selection and visib
   for (const height of [430, 440, 479, 480, 400]) {
     await page.setViewportSize({ width: viewport.width, height });
     await expect(panel).toBeVisible();
-    await expect(panel.getByRole('heading', { level: 2 })).toHaveText(/Harmonic Calibration 01/i);
+    await expect(panel.getByRole('heading', { level: 2 })).toHaveText('Carrier Tone Plate');
     if (height === 440) regularHeaderHeight = (await page.locator('.game-header').boundingBox()).height;
     const measurement = await measurePanelAndDocument(page);
     console.info(`Resize checkpoint ${viewport.width}x${height}: ${JSON.stringify(measurement)}`);

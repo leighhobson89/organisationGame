@@ -1,11 +1,15 @@
 import React from 'react';
 
-export function DestinationCard({ destination, placedCount, complete, guided = false, guidedItemTitle, onFocus }) {
+export function DestinationCard({ destination, collection, placedCount, complete, guided = false, guidedItemTitle, onFocus }) {
   const family = destination.family ?? 'archive';
   const familyClass = String(family).toLowerCase().replace(/[^a-z0-9-]/g, '-');
   const slots = destination.slotCount ?? destination.slots ?? 0;
+  const contentsLabel = destination.contentsLabel ?? 'Laboratory records';
+  const collectionLabel = collection?.label ? `Collection: ${collection.label}.` : null;
   const description = [
-    `Final ${family} destination. ${placedCount} of ${slots || 'many'} objects placed`,
+    `Final container for ${contentsLabel.toLowerCase()}. ${placedCount} of ${slots || 'many'} objects placed`,
+    collectionLabel,
+    'Slots auto-fill; items may be filed in any order',
     complete ? 'Collection complete' : null,
     guided ? `Aether Wayfinder marks this destination for ${guidedItemTitle || 'the selected item'}` : null,
   ].filter(Boolean).join('. ');
@@ -40,7 +44,9 @@ export function DestinationCard({ destination, placedCount, complete, guided = f
         <span className="destination-symbol" aria-hidden="true">▤</span>
         <div>
           <h3>{destination.label}</h3>
-          <p>{family} archive · {placedCount}{slots ? ` / ${slots}` : ''}</p>
+          <p>{contentsLabel} · {placedCount}{slots ? ` / ${slots}` : ''}</p>
+          {collection?.label && <p className="destination-collection-label">Collection: {collection.label}</p>}
+          <p className="destination-filing-rule">Auto-fill slots; any order is fine.</p>
         </div>
         {complete && <span className="destination-complete" aria-label="Collection restored">✓ Restored</span>}
       </div>

@@ -98,16 +98,16 @@ const FAMILY_CONFIG = Object.freeze([
 ]);
 
 const CALIBRATION_GLYPHS = Object.freeze(['◇', '⚙', '◉', '✦', '⚙', '◇', '✦', '◉']);
-const CALIBRATION_CLUES = Object.freeze([
-  'A gold edge-mark identifies this as part of the calibration folio.',
-  'The corner notch is aligned to the left-hand rail.',
-  'A small equation links this plate to the resonance chamber.',
-  'The Professor wrote “do not trust the first reading” in the margin.',
-  'A repeated glyph appears beside the old pressure scale.',
-  'The paper is cut to fit a narrow brass overlay.',
-  'The final ink stroke points toward the central instrument.',
-  'The folio is incomplete until all eight tuning plates are reunited.',
-]);
+const CALIBRATION_CARD_COPY_BY_ID = Object.freeze({
+  'calibration-card-01': Object.freeze({ title: 'Carrier Tone Plate', clue: 'Its split-gold calibration seal matches the Harmonic Calibration Folio. This plate records the carrier tone used by the other resonance trials.' }),
+  'calibration-card-02': Object.freeze({ title: 'Western Echo Trace', clue: 'The split-gold seal marks this as a Harmonic Calibration plate. Its wave returns from the western rail of the resonance chamber.' }),
+  'calibration-card-03': Object.freeze({ title: 'Eastern Echo Trace', clue: 'This matching calibration plate records the paired echo from the eastern rail. Compare its waveform with the western trace.' }),
+  'calibration-card-04': Object.freeze({ title: 'Counterphase Sketch', clue: 'A split-gold calibration seal appears beside the counterphase drawing. The note compares it with the carrier tone, not the gear diagrams.' }),
+  'calibration-card-05': Object.freeze({ title: 'Crystal Response Diagram', clue: 'This marked resonance diagram records how the memory crystal responds to the chamber pulse. It belongs with the other tuning plates.' }),
+  'calibration-card-06': Object.freeze({ title: 'Silent Chamber Trace', clue: 'The chamber appears empty, but a faint resonance remains on this calibration plate. Its split-gold seal matches the Folio.' }),
+  'calibration-card-07': Object.freeze({ title: 'Bell-Rail Harmonic', clue: 'A measured tone from the bell rail is stamped with the Harmonic Calibration seal. This is a resonance record, not a handwritten note.' }),
+  'calibration-card-08': Object.freeze({ title: 'Residual Wave Etching', clue: 'Final resonance trace; its split-gold seal matches the Folio.' }),
+});
 
 function hashSeed(seed) {
   const value = String(seed ?? 'first-shift');
@@ -304,23 +304,26 @@ function createCalibrationCards() {
   const collection = COLLECTIONS.find((entry) => entry.id === 'harmonic-calibration');
   const destination = DESTINATIONS.find((entry) => entry.id === collection.destinationId);
 
-  return collection.itemIds.map((id, index) => ({
-    id,
-    family: 'blueprint-fragment',
-    collectionId: collection.id,
-    title: `Harmonic Calibration ${String(index + 1).padStart(2, '0')}`,
-    clue: CALIBRATION_CLUES[index],
-    mark: CALIBRATION_GLYPHS[index],
-    sequenceIndex: index + 1,
-    position: calibrationCardPosition(index),
-    width: CALIBRATION_CARD_GRID.width,
-    height: CALIBRATION_CARD_GRID.height,
-    rotation: 0,
-    placement: { kind: 'workspace' },
-    validation: 'unchecked',
-    correctDestinationId: destination.id,
-    authored: true,
-  }));
+  return collection.itemIds.map((id, index) => {
+    const copy = CALIBRATION_CARD_COPY_BY_ID[id];
+    return {
+      id,
+      family: 'blueprint-fragment',
+      collectionId: collection.id,
+      title: copy.title,
+      clue: copy.clue,
+      mark: CALIBRATION_GLYPHS[index],
+      sequenceIndex: index + 1,
+      position: calibrationCardPosition(index),
+      width: CALIBRATION_CARD_GRID.width,
+      height: CALIBRATION_CARD_GRID.height,
+      rotation: 0,
+      placement: { kind: 'workspace' },
+      validation: 'unchecked',
+      correctDestinationId: destination.id,
+      authored: true,
+    };
+  });
 }
 
 function createFillerItem(random, layoutRandom, familyConfig, familyIndex, familySequence, positionIndex = null) {

@@ -7,7 +7,7 @@ test('the first calibration placement dismisses only the first-action lead', asy
   const hint = page.locator('.world-hint');
   await expect(hint).toBeVisible();
   await expect(hint).toContainText(/Harmonic Calibration/i);
-  await expect(hint).toContainText(/blueprints?/i);
+  await expect(hint).toContainText(/tuning plates/i);
   await expect(hint).toContainText(/Harmonic Calibration Folio/i);
   await expect(hint).toContainText(/Drag objects to a cabinet or workbench/i);
   const mouseGuidance = hint.locator('.world-hint__mouse-guidance');

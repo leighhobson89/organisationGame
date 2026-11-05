@@ -149,6 +149,10 @@
   transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
 
+.header-control__help-compact {
+  display: none;
+}
+
 .header-control:hover {
   border-color: var(--brass-300);
   background: linear-gradient(180deg, #77582f, #49331f);
@@ -1248,6 +1252,11 @@
   font-size: 0.76rem;
 }
 
+.selected-items-series {
+  margin: 8px 0 0;
+  color: #fff0cd;
+}
+
 .selected-item-list li {
   min-width: 0;
   padding: 8px 9px;
@@ -1296,6 +1305,16 @@
   font-weight: 650;
   line-height: 1.25;
   text-transform: capitalize;
+  overflow-wrap: anywhere;
+}
+
+.selected-item-series {
+  display: block;
+  min-width: 0;
+  color: #fff0cd;
+  font-size: 0.69rem;
+  font-weight: 650;
+  line-height: 1.25;
   overflow-wrap: anywhere;
 }
 
@@ -1706,6 +1725,7 @@
 }
 
 .item-family,
+.item-series,
 .inspector-meta {
   color: var(--brass-300) !important;
   font-size: 0.69rem !important;
@@ -2248,6 +2268,22 @@
 .destination-plate > div {
   min-width: 0;
   flex: 1 1 auto;
+}
+
+.destination-plate > div > p {
+  margin: 3px 0 0;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.destination-plate .destination-collection-label {
+  color: #ead9b6;
+  font-weight: 700;
+}
+
+.destination-plate .destination-filing-rule {
+  color: #fff0cd;
+  font-weight: 750;
 }
 
 .destination-symbol {
@@ -2836,6 +2872,37 @@
 
 .save-dialog .panel-heading {
   margin-bottom: 12px;
+}
+
+.how-to-play-steps {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+  padding-left: 1.4rem;
+  color: #eadbbd;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.how-to-play-steps li {
+  padding-left: 2px;
+}
+
+.how-to-play-steps li::marker {
+  color: var(--brass-300);
+  font-weight: 800;
+}
+
+.how-to-play-first-task {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid rgb(201 161 95 / 50%);
+  border-radius: var(--radius-xs);
+  background: rgb(16 12 8 / 34%);
+}
+
+.how-to-play-first-task p {
+  line-height: 1.4;
 }
 
 .save-dialog .save-status-line {
@@ -3879,6 +3946,22 @@
     white-space: normal;
     overflow-wrap: anywhere;
   }
+
+  :root[style*="--text-scale: 2"] .header-actions {
+    gap: 4px;
+  }
+
+  :root[style*="--text-scale: 2"] .header-control {
+    padding-inline: 8px;
+  }
+
+  :root[style*="--text-scale: 2"] .header-control__help-full {
+    display: none;
+  }
+
+  :root[style*="--text-scale: 2"] .header-control__help-compact {
+    display: inline;
+  }
 }
 
 @media (min-width: 1341px) {
@@ -4219,11 +4302,19 @@
 
 @media (max-width: 360px) {
   .header-actions {
-    gap: 3px;
+    gap: 2px;
   }
 
   .header-actions .header-control {
-    padding-inline: 6px;
+    padding-inline: 3px;
+  }
+
+  .header-control__help-full {
+    display: none;
+  }
+
+  .header-control__help-compact {
+    display: inline;
   }
 
   .world-atlas-panel {

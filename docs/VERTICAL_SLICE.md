@@ -10,6 +10,10 @@ The slice also includes the Harmonic Calibration folio, four general filing dest
 
 ## Player interactions and progression
 
+The persistent **How to Play** guide explains how to inspect an item, use its title/series/clue to choose a permanent container, move it with drag-and-drop or the Inspector, track progress in the Notebook, and navigate/save the lab. A fresh start also shows the first task: match one of eight individually named tuning plates to the **Harmonic Calibration Folio**. The Inspector labels the plate type and series; the Folio names its eight resonance plates. Destination slots fill automatically and accept items in any order. Scratch pads are temporary; ordered puzzle sequences are separate from filing order.
+
+**Save & Restore** offers **Start Over** with an explicit confirmation. On confirmation, the current game is saved to the existing backup key before a fresh 174-item game replaces the autosave. Manual save slots are untouched. If either required write fails, the current session stays open and reports the failure.
+
 The multi-selection Inspector shows every selected item's title, family, and clue as a semantic definition list. Its details scroll independently while the group Move controls remain pinned, including when all 40 available items are selected.
 
 1. Pan and zoom through the world, including keyboard navigation, and return to items or destinations through world controls. Touch supports two-finger pinch zoom anchored at the moving midpoint; when one pinch finger lifts, the remaining finger continues as a one-finger pan. A second touch during item drag cancels the drag without dropping or moving the item. Camera changes use the existing save path and add no save fields. The Palimpsest Engine jump centers the Engine at 100% when it fits and scales down to keep it fully visible on narrow screens. The same jump selector lists unfinished collections with live correctly-filed counts and focuses the first loose or misfiled member; it derives status from actual placement and removes a collection when all members are filed correctly.

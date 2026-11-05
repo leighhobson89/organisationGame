@@ -1,6 +1,6 @@
 # Plan: Browser Scaling and Two-Chapter Playtest Gate
 
-**Status:** Active. The hybrid renderer's same-host interaction gate passes; keep this plan open until the two-chapter playthrough and independent human feedback are complete. The user deferred the independent human playtest for now; this gate remains open and content expansion remains gated.
+**Status:** Active. Focused software checks indicate readiness to begin the human test; the independent two-chapter playthrough and feedback remain open. Keep this plan active and content expansion gated until the playtest is reviewed. See the [Phase 1 readiness checklist](../PHASE_1_HUMAN_TESTING.md).
 
 Serialization optimization, frame-bounded camera/culling, and the hybrid Canvas overview implementation are complete and reviewed. The clustered baseline, post-serialization distributed retest, post-camera retest, and hybrid overview retest remain separate reports. The hybrid overview meets the same-host full-world interaction gate. The two-chapter manual playthrough and independent human feedback remain open, so content expansion remains gated and this plan stays active.
 
