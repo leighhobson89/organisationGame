@@ -1,11 +1,14 @@
 import { expect, test } from '@playwright/test';
 import { createNewGameState } from '../../src/game/persistence/gameState.js';
 import { encodeSave } from '../../src/game/persistence/save.js';
+import { DESTINATIONS, WORLD_BOUNDS } from '../../src/game/content/catalog.js';
+import { getTargetSlotPosition } from '../../src/game/world/placementLayout.js';
 import { PREFERENCES_STORAGE_KEY } from '../../src/game/preferences/preferences.js';
+import { expectPlaceholderContrast } from '../helpers/placeholderContrast.js';
 
 const autoSaveKey = 'palimpsest-laboratory.autosave.v1';
 
-async function seedGame(page) {
+async function seedGame(page, { textScale = 1.5 } = {}) {
   const state = createNewGameState();
   await page.addInitScript(({ saveKey, saveValue, preferencesKey, preferencesValue }) => {
     window.localStorage.setItem(saveKey, saveValue);
@@ -16,7 +19,7 @@ async function seedGame(page) {
     preferencesKey: PREFERENCES_STORAGE_KEY,
     preferencesValue: JSON.stringify({
       version: 1,
-      textScale: 1.5,
+      textScale,
       reduceMotion: false,
       soundEffectsEnabled: false,
     }),
@@ -120,6 +123,38 @@ async function expectFocusVisibleInFinder(finder, control, description, innerScr
     geometry.elementFromPoint.hit?.isTargetOrDescendant,
     `${description} should not be obscured at its center point: ${details}`,
   ).toBe(true);
+}
+
+async function expectHeaderControlVisibleInViewport(control, description) {
+  await expect(control).toBeFocused();
+  const geometry = await control.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const hit = document.elementFromPoint(centerX, centerY);
+    const actions = element.closest('.header-actions');
+    const actionsRect = actions.getBoundingClientRect();
+    const actionsLeft = actionsRect.left + actions.clientLeft;
+    const actionsTop = actionsRect.top + actions.clientTop;
+    const actionsRight = actionsLeft + actions.clientWidth;
+    const actionsBottom = actionsTop + actions.clientHeight;
+    return {
+      fullyVisible: rect.left >= -1 && rect.right <= window.innerWidth + 1
+        && rect.top >= -1 && rect.bottom <= window.innerHeight + 1,
+      withinHeaderScrollport: rect.left >= actionsLeft - 1 && rect.right <= actionsRight + 1
+        && rect.top >= actionsTop - 1 && rect.bottom <= actionsBottom + 1,
+      hitTestable: hit === element || element.contains(hit),
+      targetBounds: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+      headerScrollportBounds: { left: actionsLeft, top: actionsTop, right: actionsRight, bottom: actionsBottom },
+      viewportBounds: { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight },
+      headerActionsScrollLeft: actions.scrollLeft,
+      hitTarget: hit ? { tagName: hit.tagName, className: String(hit.className), testId: hit.getAttribute('data-testid') } : null,
+    };
+  });
+
+  expect.soft(geometry.fullyVisible, `${description} should remain fully visible in the viewport: ${JSON.stringify(geometry)}`).toBe(true);
+  expect.soft(geometry.withinHeaderScrollport, `${description} should remain fully inside the header actions scrollport: ${JSON.stringify(geometry)}`).toBe(true);
+  expect.soft(geometry.hitTestable, `${description} should be hit-testable at its center: ${JSON.stringify(geometry)}`).toBe(true);
 }
 
 async function expectFinderLayout(finder, viewport) {
@@ -299,6 +334,35 @@ async function expectCompactToolbarRow(toolbar, page, viewport) {
   await page.getByRole('searchbox', { name: 'Search laboratory items' }).focus();
 }
 
+async function expectFinderBrandVisible(page) {
+  const geometry = await page.locator('.game-header').evaluate((header) => {
+    const heading = header.querySelector('.game-brand h1');
+    const headerRect = header.getBoundingClientRect();
+    const headingRect = heading.getBoundingClientRect();
+    const headerLeft = headerRect.left + header.clientLeft;
+    const headerTop = headerRect.top + header.clientTop;
+    const headerRight = headerLeft + header.clientWidth;
+    const headerBottom = headerTop + header.clientHeight;
+    return {
+      headingInsideHeader: headingRect.left >= headerLeft - 1 && headingRect.right <= headerRight + 1
+        && headingRect.top >= headerTop - 1 && headingRect.bottom <= headerBottom + 1,
+      headingInsideViewport: headingRect.left >= -1 && headingRect.right <= window.innerWidth + 1
+        && headingRect.top >= -1 && headingRect.bottom <= window.innerHeight + 1,
+      headingHasNoVerticalOverflow: heading.scrollHeight <= heading.clientHeight + 1,
+      headingBounds: { left: headingRect.left, top: headingRect.top, right: headingRect.right, bottom: headingRect.bottom },
+      headerBounds: { left: headerLeft, top: headerTop, right: headerRight, bottom: headerBottom },
+      viewportBounds: { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight },
+      headingScrollHeight: heading.scrollHeight,
+      headingClientHeight: heading.clientHeight,
+      brandFlexBasis: getComputedStyle(heading.parentElement).flexBasis,
+    };
+  });
+
+  expect.soft(geometry.headingInsideHeader, `Finder brand heading should fit inside the game header: ${JSON.stringify(geometry)}`).toBe(true);
+  expect.soft(geometry.headingInsideViewport, `Finder brand heading should fit inside the viewport: ${JSON.stringify(geometry)}`).toBe(true);
+  expect.soft(geometry.headingHasNoVerticalOverflow, `Finder brand heading should not clip vertically: ${JSON.stringify(geometry)}`).toBe(true);
+}
+
 async function expectAtlasToggleClearOfFinder(finder, atlasToggle) {
   const geometry = await finder.evaluate((panel) => {
     const toggle = document.querySelector('[data-testid="world-atlas-toggle"]');
@@ -444,3 +508,227 @@ for (const viewport of [
       .map((item) => `item-finder-result-${item.id}`));
   });
 }
+
+test('200% Item Finder controls remain visible and keyboard-reachable at 320x360', async ({ page }) => {
+  const viewport = { width: 320, height: 360 };
+  await page.setViewportSize(viewport);
+  const seededState = await seedGame(page, { textScale: 2 });
+  await expect(page.locator('html')).toHaveCSS('--text-scale', '2');
+
+  const finder = page.getByRole('search', { name: 'Find a laboratory item' });
+  const search = finder.getByRole('searchbox', { name: 'Search laboratory items' });
+  const close = finder.getByRole('button', { name: 'Close item finder' });
+  const results = finder.locator('.item-finder-result');
+  const nextPage = finder.getByRole('button', { name: 'Next page' });
+  const resultScrollport = finder.locator('.item-finder-results');
+  const toolbar = page.getByRole('group', { name: 'World navigation controls' });
+  const worldJump = page.getByTestId('world-jump');
+  const atlasToggle = page.getByTestId('world-atlas-toggle');
+
+  await expect(finder).toBeVisible();
+  await expect(search).toBeFocused();
+  await expect(finder.locator('.item-finder-count')).toHaveText(`${seededState.items.length} matching items`);
+  await expectFinderControlsVisibleOnOpen(finder, close, search);
+  await expectCompactToolbarRow(toolbar, page, viewport);
+  await expectFinderBrandVisible(page);
+
+  const notebook = page.getByTestId('toggle-notebook');
+  const headerActions = page.locator('.header-actions');
+  const headerActionsInitial = await headerActions.evaluate((element) => ({
+    scrollLeft: element.scrollLeft,
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+    overflowX: getComputedStyle(element).overflowX,
+  }));
+  expect(headerActionsInitial.scrollWidth, 'header actions should have horizontal overflow at 200%')
+    .toBeGreaterThan(headerActionsInitial.clientWidth + 1);
+  expect(['auto', 'scroll'], 'header actions should allow horizontal scrolling').toContain(headerActionsInitial.overflowX);
+
+  await notebook.focus();
+  await expectHeaderControlVisibleInViewport(notebook, 'Notebook header control');
+  for (const [control, description] of [
+    [page.getByTestId('toggle-skills'), 'Skills header control'],
+    [page.getByTestId('open-saves'), 'Save & Restore header control'],
+    [page.getByTestId('open-settings'), 'Settings header control'],
+  ]) {
+    await page.keyboard.press('Tab');
+    await expectHeaderControlVisibleInViewport(control, description);
+  }
+  const headerActionsAfterSettings = await headerActions.evaluate((element) => element.scrollLeft);
+  expect(headerActionsAfterSettings, 'Tab traversal should advance the header actions scrollport to later controls')
+    .toBeGreaterThan(headerActionsInitial.scrollLeft);
+  await search.focus();
+  await expect(search).toBeFocused();
+
+  const pageIndicator = finder.getByTestId('item-finder-page');
+  const firstPageLabel = await pageIndicator.textContent();
+  const pageMatch = firstPageLabel?.match(/^Page 1 of (\d+)$/);
+  expect(pageMatch, `Expected a rendered first-page count, got: ${firstPageLabel}`).not.toBeNull();
+  const pageCount = Number(pageMatch[1]);
+  const firstPageCount = await results.count();
+  expect(firstPageCount, 'the rendered first page should contain results').toBeGreaterThan(0);
+  expect(pageCount, 'rendered page count should match the seeded item count and page capacity')
+    .toBe(Math.ceil(seededState.items.length / firstPageCount));
+  expect(pageCount, 'the seeded item catalog should have a next page').toBeGreaterThan(1);
+
+  await expectToolbarAvailable(finder, toolbar, worldJump);
+  await expectAtlasToggleClearOfFinder(finder, atlasToggle);
+  await expectFinderLayout(finder, viewport);
+
+  const initialPanelScrollTop = await finder.evaluate((element) => element.scrollTop);
+  const initialResultsScrollTop = await resultScrollport.evaluate((element) => element.scrollTop);
+  await page.keyboard.press('Shift+Tab');
+  await expectFocusVisibleInFinder(finder, close, 'Close button');
+  await page.keyboard.press('Tab');
+  await expectFocusVisibleInFinder(finder, search, 'Search field');
+  await page.keyboard.press('Tab');
+
+  for (let index = 0; index < firstPageCount; index += 1) {
+    const result = results.nth(index);
+    await expectFocusVisibleInFinder(finder, result, `Search result ${index + 1}`, '.item-finder-results');
+    if (index < firstPageCount - 1) await page.keyboard.press('Tab');
+  }
+
+  const finalResultsScrollTop = await resultScrollport.evaluate((element) => element.scrollTop);
+  expect(finalResultsScrollTop, 'Tab traversal should scroll the results list to later items')
+    .toBeGreaterThan(initialResultsScrollTop);
+  await page.keyboard.press('Tab');
+  await expectFocusVisibleInFinder(finder, nextPage, 'Next page button');
+  const finalPanelScrollTop = await finder.evaluate((element) => element.scrollTop);
+  expect(finalPanelScrollTop, 'Tab traversal should scroll the Finder shell to later controls')
+    .toBeGreaterThan(initialPanelScrollTop);
+  await page.keyboard.press('Enter');
+  await expect(pageIndicator).toHaveText(`Page 2 of ${pageCount}`);
+
+  const query = 'Brass Cog';
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const expectedMatches = seededState.items.filter((item) => [item.title, item.family, item.clue, item.id]
+    .some((value) => String(value ?? '').toLocaleLowerCase().includes(normalizedQuery)));
+  expect(expectedMatches.length, 'the search query should match at least one fixture item').toBeGreaterThan(0);
+  expect(expectedMatches.length, 'the search query should narrow the fixture items')
+    .toBeLessThan(seededState.items.length);
+  await search.fill(query);
+  await expect(finder.locator('.item-finder-count'))
+    .toHaveText(`${expectedMatches.length} matching ${expectedMatches.length === 1 ? 'item' : 'items'}`);
+  await expect(pageIndicator)
+    .toHaveText(`Page 1 of ${Math.max(1, Math.ceil(expectedMatches.length / 25))}`);
+  const filteredResultIds = await results.evaluateAll((elements) =>
+    elements.map((element) => element.getAttribute('data-testid')));
+  expect(filteredResultIds).toEqual(expectedMatches.slice(0, 25)
+    .map((item) => `item-finder-result-${item.id}`));
+
+  await results.first().click();
+  await expect(finder).toHaveCount(0);
+  const inspector = page.getByTestId('item-inspector');
+  await expect(inspector).toBeVisible();
+  await expect(inspector.getByRole('heading', { name: expectedMatches[0].title, exact: true })).toBeVisible();
+});
+
+test('Item Finder placeholder contrast meets WCAG AA at every gradient stop', async ({ page }) => {
+  await seedGame(page);
+  const finder = page.getByRole('search', { name: 'Find a laboratory item' });
+  const search = finder.getByRole('searchbox', { name: 'Search laboratory items' });
+
+  await search.evaluate((element) => {
+    element.placeholder = 'Search items';
+    element.blur();
+  });
+  await expectPlaceholderContrast(search, 'Item Finder search');
+});
+
+test('Finder identifies a canvas-only misfiled item and exposes its recovery at 200% text on a narrow screen', async ({ page }) => {
+  const initialViewport = { width: 3000, height: 1800 };
+  const narrowViewport = { width: 320, height: 480 };
+  await page.setViewportSize(initialViewport);
+
+  const state = createNewGameState();
+  const canvasOnlyItem = state.items.at(-1);
+  const incorrectDestination = DESTINATIONS.find((destination) => (
+    destination.id !== canvasOnlyItem.correctDestinationId
+  ));
+  canvasOnlyItem.position = getTargetSlotPosition({
+    target: { kind: 'destination', id: incorrectDestination.id },
+    item: canvasOnlyItem,
+    slotIndex: 0,
+    destinations: DESTINATIONS,
+  });
+  canvasOnlyItem.placement = {
+    kind: 'destination',
+    destinationId: incorrectDestination.id,
+    slotIndex: 0,
+  };
+  state.camera = {
+    scale: 0.4,
+    panX: initialViewport.width / 2 - (WORLD_BOUNDS.x + WORLD_BOUNDS.width / 2) * 0.4,
+    panY: initialViewport.height / 2 - (WORLD_BOUNDS.y + WORLD_BOUNDS.height / 2) * 0.4,
+  };
+  await page.addInitScript(({ saveKey, saveValue, preferencesKey, preferencesValue }) => {
+    window.localStorage.setItem(saveKey, saveValue);
+    window.localStorage.setItem(preferencesKey, preferencesValue);
+  }, {
+    saveKey: autoSaveKey,
+    saveValue: encodeSave(state),
+    preferencesKey: PREFERENCES_STORAGE_KEY,
+    preferencesValue: JSON.stringify({
+      version: 1,
+      textScale: 2,
+      reduceMotion: false,
+      soundEffectsEnabled: false,
+    }),
+  });
+
+  await page.goto('/');
+  await expect(page.getByTestId('autosave-status')).toHaveText('Saved just now');
+  const overview = page.getByTestId('world-overview-canvas');
+  await expect(overview).toBeVisible();
+  const renderedItemIds = await page.locator('.world-scene .lab-object').evaluateAll((buttons) => (
+    buttons.map((button) => button.dataset.itemId)
+  ));
+  expect(renderedItemIds, 'the target should be represented by the overview canvas before Finder opens')
+    .not.toContain(canvasOnlyItem.id);
+
+  await page.getByRole('button', { name: 'Find an item', exact: true }).click();
+  const finder = page.getByRole('search', { name: 'Find a laboratory item' });
+  const search = finder.getByRole('searchbox', { name: 'Search laboratory items' });
+  await expect(finder.locator('.item-finder-result').first().getByText('Misfiled', { exact: true }))
+    .toHaveCount(0);
+  await search.fill(canvasOnlyItem.title);
+  const result = page.getByTestId(`item-finder-result-${canvasOnlyItem.id}`);
+  await expect(result).toBeVisible();
+  await expect(result.getByText('Misfiled', { exact: true })).toBeVisible();
+  await expect(result).toHaveAccessibleName(/Misfiled.*move.*correct/i);
+
+  await page.setViewportSize(narrowViewport);
+  const narrowLayout = await finder.evaluate((panel) => {
+    const rect = panel.getBoundingClientRect();
+    return {
+      left: rect.left,
+      right: rect.right,
+      viewportWidth: window.innerWidth,
+      documentWidth: document.documentElement.scrollWidth,
+    };
+  });
+  expect(narrowLayout.left, 'Finder should stay within the narrow viewport').toBeGreaterThanOrEqual(0);
+  expect(narrowLayout.right, 'Finder should stay within the narrow viewport').toBeLessThanOrEqual(narrowLayout.viewportWidth);
+  expect(narrowLayout.documentWidth, 'the narrow result should not create page-level horizontal overflow')
+    .toBeLessThanOrEqual(narrowLayout.viewportWidth);
+  await expect(result.getByText('Misfiled', { exact: true })).toBeVisible();
+  const rowGeometry = await result.evaluate((button) => ({
+    scrollWidth: button.scrollWidth,
+    clientWidth: button.clientWidth,
+  }));
+  expect(rowGeometry.scrollWidth, 'the result and Misfiled cue should fit without horizontal row overflow')
+    .toBeLessThanOrEqual(rowGeometry.clientWidth + 1);
+
+  await result.focus();
+  await expect(result).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(finder).toHaveCount(0);
+  const selectedObject = page.getByTestId(`lab-item-${canvasOnlyItem.id}`);
+  await expect(selectedObject).toBeVisible();
+  await expect(selectedObject).toHaveClass(/misfiled/);
+  const inspector = page.getByTestId('item-inspector');
+  await expect(inspector.getByRole('status')).toContainText(/Misfiled.*Move it somewhere else to correct the record/i);
+  await expect(inspector.getByTestId('move-item')).toBeVisible();
+  await expect(inspector.getByRole('combobox', { name: 'Move to destination or work surface' })).toBeFocused();
+});

@@ -16,6 +16,10 @@ const largeTextHeaderPreferences = {
   ...scaledHeaderPreferences,
   textScale: 1.5,
 };
+const extraLargeTextHeaderPreferences = {
+  ...scaledHeaderPreferences,
+  textScale: 2,
+};
 const puzzleButtonName = /Chronology of the Last Bell.*solved/i;
 const headerActions = [
   { testId: 'toggle-notebook', name: 'Notebook' },
@@ -272,6 +276,38 @@ for (const viewport of [
   }
 }
 
+test('laboratory restoration summary stays complete and inside the header at 200% text', async ({ page }) => {
+  const viewport = { width: 1280, height: 720 };
+  await loadHeaderFixture(page, viewport, extraLargeTextHeaderPreferences);
+  await expect(page.locator('html')).toHaveCSS('--text-scale', '2');
+
+  await expect(page.getByTestId('skill-points')).toHaveText(/^3 collection rewards .*Skill points: 0$/);
+  await expect(page.getByTestId('chapter-progress')).toHaveText('Research collections: 3 of 3');
+  await expect(page.getByTestId('invention-stage')).toHaveText('Invention stage: Chronology Wheel');
+
+  await assertScaledHeaderGeometry(page, viewport, 200);
+
+  const header = page.locator('.game-header');
+  const progress = page.locator('.header-progress');
+  const [headerBox, progressBox] = await Promise.all([header.boundingBox(), progress.boundingBox()]);
+  expect(headerBox).not.toBeNull();
+  expect(progressBox).not.toBeNull();
+
+  const summaryRows = progress.locator('small:visible');
+  await expect(summaryRows).toHaveCount(4);
+  for (const row of await summaryRows.all()) {
+    const rowGeometry = await row.evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      right: element.getBoundingClientRect().right,
+    }));
+    expect(rowGeometry.scrollWidth, 'each visible progress summary must fit without clipping').toBeLessThanOrEqual(rowGeometry.clientWidth);
+    expect(rowGeometry.right, 'each visible progress summary must stay inside the restoration summary').toBeLessThanOrEqual(progressBox.x + progressBox.width + 1);
+    expect(rowGeometry.right, 'each visible progress summary must stay inside the page header').toBeLessThanOrEqual(headerBox.x + headerBox.width + 1);
+    expect(rowGeometry.right, 'each visible progress summary must stay inside the viewport').toBeLessThanOrEqual(viewport.width + 1);
+  }
+});
+
 test('mobile laboratory header keeps all tools accessible in the existing scrollable row', async ({ page }) => {
   const viewport = { width: 390, height: 844 };
   await loadHeaderFixture(page, viewport);
@@ -297,6 +333,19 @@ test('mobile laboratory header keeps all tools accessible in the existing scroll
   await expectHeaderActions(page);
 });
 
+test('compact header exposes laboratory restoration as an accessible progressbar', async ({ page }) => {
+  await loadHeaderFixture(page, { width: 390, height: 480 });
+
+  await expect(page.locator('.header-progress > span:last-child')).toBeHidden();
+  const restoration = page.getByRole('progressbar', { name: 'Laboratory restoration' });
+  await expect(restoration).toBeVisible();
+  await expect(restoration).toHaveAttribute('aria-valuemin', '0');
+  await expect(restoration).toHaveAttribute('aria-valuemax', '100');
+  const displayedPercent = Number.parseInt(await restoration.textContent(), 10);
+  expect(displayedPercent, 'fixture should exercise a nonzero restoration value').toBeGreaterThan(0);
+  await expect(restoration).toHaveAttribute('aria-valuenow', String(displayedPercent));
+});
+
 for (const viewport of [
   { width: 320, height: 480 },
   { width: 390, height: 480 },
@@ -309,3 +358,163 @@ for (const viewport of [
     });
   }
 }
+
+test('standalone header keeps all tools reachable at 200% text on a 320x360 viewport', async ({ page }) => {
+  const viewport = { width: 320, height: 360 };
+  await loadHeaderFixture(page, viewport, extraLargeTextHeaderPreferences);
+  await expect(page.locator('html')).toHaveCSS('--text-scale', '2');
+
+  const header = page.locator('.game-header');
+  const nav = page.getByRole('navigation', { name: 'Laboratory tools' });
+  const buttons = await expectHeaderActions(page);
+  const [headerBox, navBox, documentWidth, navMetrics] = await Promise.all([
+    header.boundingBox(),
+    nav.boundingBox(),
+    page.evaluate(() => document.documentElement.scrollWidth),
+    nav.evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      overflowX: window.getComputedStyle(element).overflowX,
+      scrollLeft: element.scrollLeft,
+    })),
+  ]);
+
+  expect(headerBox, 'standalone header should have rendered geometry').not.toBeNull();
+  expect(navBox, 'standalone navigation should have rendered geometry').not.toBeNull();
+  expect(headerBox.x, 'header should begin inside the viewport').toBeGreaterThanOrEqual(0);
+  expect(headerBox.x + headerBox.width, 'header should stay inside the viewport').toBeLessThanOrEqual(viewport.width);
+  expect(headerBox.y, 'header should begin inside the viewport').toBeGreaterThanOrEqual(0);
+  expect(headerBox.y + headerBox.height, 'header should stay inside the viewport').toBeLessThanOrEqual(viewport.height);
+  expect(navBox.x, 'navigation should stay inside the viewport').toBeGreaterThanOrEqual(0);
+  expect(navBox.x + navBox.width, 'navigation should stay inside the viewport').toBeLessThanOrEqual(viewport.width);
+  expect(navBox.y, 'navigation should stay inside the header').toBeGreaterThanOrEqual(headerBox.y - 1);
+  expect(navBox.y + navBox.height, 'navigation should stay inside the header').toBeLessThanOrEqual(headerBox.y + headerBox.height + 1);
+  expect(documentWidth, 'standalone header should not create page-level horizontal overflow').toBeLessThanOrEqual(viewport.width);
+  expect(navMetrics.overflowX, 'navigation should scroll horizontally for the five completed-game actions').toBe('auto');
+  expect(navMetrics.scrollWidth, 'the five actions should exercise horizontal navigation scrolling').toBeGreaterThan(navMetrics.clientWidth);
+
+  const initialScrollLeft = navMetrics.scrollLeft;
+  let navigationScrolled = false;
+  await page.keyboard.press('Tab');
+
+  for (let index = 0; index < headerActions.length; index += 1) {
+    const action = headerActions[index];
+    const button = buttons[index];
+    await expect(button, `${action.testId} should receive sequential keyboard focus`).toBeFocused();
+
+    const [buttonBox, visibleNavBox, actionMetrics, scrollLeft] = await Promise.all([
+      button.boundingBox(),
+      nav.boundingBox(),
+      button.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const hitTarget = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        const style = window.getComputedStyle(element);
+        return {
+          clientWidth: element.clientWidth,
+          scrollWidth: element.scrollWidth,
+          clientHeight: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+          centerHit: hitTarget === element || element.contains(hitTarget),
+          focusVisible: element.matches(':focus-visible'),
+          outlineStyle: style.outlineStyle,
+          outlineWidth: Number.parseFloat(style.outlineWidth),
+        };
+      }),
+      nav.evaluate((element) => element.scrollLeft),
+    ]);
+
+    expect(buttonBox, `${action.testId} should have rendered geometry`).not.toBeNull();
+    expect(buttonBox.x, `${action.testId} should remain fully visible inside the navigation`).toBeGreaterThanOrEqual(visibleNavBox.x - 1);
+    expect(buttonBox.x + buttonBox.width, `${action.testId} should remain fully visible inside the navigation`)
+      .toBeLessThanOrEqual(visibleNavBox.x + visibleNavBox.width + 1);
+    expect(buttonBox.y, `${action.testId} should remain inside the header`).toBeGreaterThanOrEqual(headerBox.y - 1);
+    expect(buttonBox.y + buttonBox.height, `${action.testId} should remain inside the header`)
+      .toBeLessThanOrEqual(headerBox.y + headerBox.height + 1);
+    expect(buttonBox.x, `${action.testId} should remain inside the viewport`).toBeGreaterThanOrEqual(0);
+    expect(buttonBox.x + buttonBox.width, `${action.testId} should remain inside the viewport`).toBeLessThanOrEqual(viewport.width);
+    expect(buttonBox.y, `${action.testId} should remain inside the viewport`).toBeGreaterThanOrEqual(0);
+    expect(buttonBox.y + buttonBox.height, `${action.testId} should remain inside the viewport`).toBeLessThanOrEqual(viewport.height);
+    expect(actionMetrics.scrollWidth, `${action.testId} label should not be horizontally clipped`)
+      .toBeLessThanOrEqual(actionMetrics.clientWidth + 1);
+    expect(actionMetrics.scrollHeight, `${action.testId} label should not be vertically clipped`)
+      .toBeLessThanOrEqual(actionMetrics.clientHeight + 1);
+    expect(actionMetrics.centerHit, `${action.testId} should be center hit-testable while focused`).toBe(true);
+    expect(actionMetrics.focusVisible, `${action.testId} should show its keyboard focus indicator`).toBe(true);
+    expect(actionMetrics.outlineStyle, `${action.testId} should have a visible keyboard outline`).not.toBe('none');
+    expect(actionMetrics.outlineWidth, `${action.testId} keyboard outline should have positive width`).toBeGreaterThan(0);
+    if (scrollLeft > initialScrollLeft + 1) navigationScrolled = true;
+
+    if (index < headerActions.length - 1) await page.keyboard.press('Tab');
+  }
+
+  expect(navigationScrolled, 'keyboard traversal should scroll the navigation to later actions').toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth),
+    'keyboard traversal should not create page-level horizontal overflow').toBeLessThanOrEqual(viewport.width);
+});
+
+test('default-text header controls fit at 320x360 without clipped navigation or labels', async ({ browser }) => {
+  const viewport = { width: 320, height: 360 };
+  const context = await browser.newContext({
+    baseURL: 'http://127.0.0.1:5173',
+    viewport,
+  });
+  try {
+    const page = await context.newPage();
+    await page.goto('/');
+    await expect(page.locator('html')).toHaveCSS('--text-scale', '1');
+
+    const defaultHeaderActions = [
+      { testId: 'toggle-notebook', name: 'Notebook' },
+      { testId: 'toggle-skills', name: 'Instruments' },
+      { testId: 'open-saves', name: 'Save & restore' },
+      { testId: 'open-settings', name: 'Settings' },
+    ];
+    const nav = page.getByRole('navigation', { name: 'Laboratory tools' });
+    const navBox = await nav.boundingBox();
+    expect(navBox, 'short mobile navigation should have rendered geometry').not.toBeNull();
+    expect(navBox.x, 'short mobile navigation should stay inside the viewport').toBeGreaterThanOrEqual(0);
+    expect(navBox.x + navBox.width, 'short mobile navigation should stay inside the viewport').toBeLessThanOrEqual(viewport.width);
+    expect(navBox.y, 'short mobile navigation should stay inside the viewport').toBeGreaterThanOrEqual(0);
+    expect(navBox.y + navBox.height, 'short mobile navigation should stay inside the viewport').toBeLessThanOrEqual(viewport.height);
+
+    const navMeasurement = await nav.evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    expect(navMeasurement.scrollWidth, 'default-text header actions should fit without horizontal navigation clipping')
+      .toBeLessThanOrEqual(navMeasurement.clientWidth);
+
+    for (const action of defaultHeaderActions) {
+      const button = page.getByTestId(action.testId);
+      await expect(button).toBeVisible();
+      await expect(button).toHaveAccessibleName(action.name);
+      const buttonBox = await button.boundingBox();
+      expect(buttonBox, `${action.testId} should have rendered geometry`).not.toBeNull();
+      expect(buttonBox.x, `${action.testId} should be wholly inside the navigation`).toBeGreaterThanOrEqual(navBox.x - 1);
+      expect(buttonBox.x + buttonBox.width, `${action.testId} should be wholly inside the navigation`)
+        .toBeLessThanOrEqual(navBox.x + navBox.width + 1);
+      expect(buttonBox.y, `${action.testId} should be wholly inside the navigation`).toBeGreaterThanOrEqual(navBox.y - 1);
+      expect(buttonBox.y + buttonBox.height, `${action.testId} should be wholly inside the navigation`)
+        .toBeLessThanOrEqual(navBox.y + navBox.height + 1);
+      expect(buttonBox.x, `${action.testId} should be wholly inside the viewport`).toBeGreaterThanOrEqual(0);
+      expect(buttonBox.x + buttonBox.width, `${action.testId} should be wholly inside the viewport`)
+        .toBeLessThanOrEqual(viewport.width);
+      expect(buttonBox.y, `${action.testId} should be wholly inside the viewport`).toBeGreaterThanOrEqual(0);
+      expect(buttonBox.y + buttonBox.height, `${action.testId} should be wholly inside the viewport`)
+        .toBeLessThanOrEqual(viewport.height);
+
+      const labelMeasurement = await button.evaluate((element) => ({
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+      }));
+      expect(labelMeasurement.scrollWidth, `${action.testId} label should not be horizontally clipped`)
+        .toBeLessThanOrEqual(labelMeasurement.clientWidth);
+      expect(labelMeasurement.scrollHeight, `${action.testId} label should not be vertically clipped`)
+        .toBeLessThanOrEqual(labelMeasurement.clientHeight);
+    }
+  } finally {
+    await context.close();
+  }
+});

@@ -71,6 +71,51 @@ async function clickWorldPoint(page, position) {
   );
 }
 
+function expectedOverviewBackingDimensions(scale, deviceScaleFactor) {
+  const clampedRatio = Math.min(1, Math.max(0.5, scale * deviceScaleFactor));
+  const backingRatio = Math.round(clampedRatio * 8) / 8;
+  return {
+    ratio: backingRatio,
+    width: Math.ceil(WORLD_BOUNDS.width * backingRatio),
+    height: Math.ceil(WORLD_BOUNDS.height * backingRatio),
+  };
+}
+
+async function installFixtureInIsolatedPage(page, fixture, camera) {
+  await page.addInitScript(({ key, value }) => {
+    window.localStorage.setItem(key, value);
+  }, {
+    key: autoSaveKey,
+    value: encodeFixtureAtCamera(fixture, camera),
+  });
+  await page.goto('/');
+  await expect(page.getByTestId('world-item-count')).toHaveText(`${fixture.items.length} objects`);
+}
+
+async function findVisibleCanvasOnlyItem(page, items) {
+  return page.evaluate((candidates) => {
+    const viewport = document.querySelector('[data-testid="world-viewport"]');
+    const scene = document.querySelector('.world-scene');
+    const canvas = document.querySelector('[data-testid="world-overview-canvas"]');
+    if (!viewport || !scene || !canvas || canvas.hidden) return null;
+
+    const viewportRect = viewport.getBoundingClientRect();
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(scene).transform);
+    const mountedIds = new Set(Array.from(document.querySelectorAll('.lab-object[data-item-id]'), (node) => node.dataset.itemId));
+    for (const item of candidates) {
+      if (mountedIds.has(item.id)) continue;
+      const worldX = item.position.x + (item.width ?? 112) / 2;
+      const worldY = item.position.y + (item.height ?? 76) / 2;
+      const clientX = viewportRect.left + matrix.e + worldX * matrix.a;
+      const clientY = viewportRect.top + matrix.f + worldY * matrix.d;
+      if (clientX < viewportRect.left || clientX >= viewportRect.right
+        || clientY < viewportRect.top || clientY >= viewportRect.bottom) continue;
+      if (document.elementFromPoint(clientX, clientY) === canvas) return { item, clientX, clientY };
+    }
+    return null;
+  }, items);
+}
+
 async function sampleCanvasCard(canvas, item) {
   return canvas.evaluate((element, specimen) => {
     const context = element.getContext('2d', { willReadFrequently: true });
@@ -163,6 +208,126 @@ test('5,024-item renderer fixture spreads synthetic filler deterministically wit
   expect(firstFixture.items).toHaveLength(5024);
   expect(new Set(firstFixture.itemIds).size).toBe(5024);
   expect(occupiedCells.size, 'synthetic filler should cover multiple world regions').toBeGreaterThanOrEqual(12);
+});
+
+test('5,024 items: overview Canvas backing follows DPR and hit-tests visible Canvas-only cards', async ({ browser }) => {
+  for (const { deviceScaleFactor, ratio, width, height } of [
+    { deviceScaleFactor: 1, ratio: 0.5, width: 2600, height: 1700 },
+    { deviceScaleFactor: 2, ratio: 0.875, width: 4550, height: 2975 },
+  ]) {
+    const context = await browser.newContext({
+      baseURL: 'http://127.0.0.1:5173',
+      viewport: { width: 1440, height: 900 },
+      deviceScaleFactor,
+    });
+    try {
+      const page = await context.newPage();
+      const fixture = createWorldFixture(5024);
+      await installFixtureInIsolatedPage(page, fixture, { panX: 0, panY: 0, scale: 0.45 });
+
+      const canvas = page.getByTestId('world-overview-canvas');
+      await expect(canvas).toBeVisible();
+      await expect(canvas).toHaveAttribute('data-rendered-item-count', '5024');
+      await expect(canvas).toHaveAttribute('width', String(width));
+      await expect(canvas).toHaveAttribute('height', String(height));
+      expect(await page.evaluate(() => window.devicePixelRatio)).toBe(deviceScaleFactor);
+      expect(await canvas.evaluate((element, worldWidth) => element.width / worldWidth, WORLD_BOUNDS.width))
+        .toBeCloseTo(ratio, 3);
+      expect(await page.locator('.lab-object').count(), 'ordinary overview overlays should stay within the 64-card cap')
+        .toBeLessThanOrEqual(64);
+
+      const canvasOnlyTarget = await findVisibleCanvasOnlyItem(page, fixture.items);
+      expect(canvasOnlyTarget, 'the initial viewport should contain a visible item absent from the DOM overlays')
+        .not.toBeNull();
+      await page.mouse.click(canvasOnlyTarget.clientX, canvasOnlyTarget.clientY);
+      await expect(page.getByTestId('item-inspector')).toContainText(canvasOnlyTarget.item.title);
+
+      if (deviceScaleFactor === 1) {
+        await page.evaluate(() => {
+          Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => 2 });
+          window.dispatchEvent(new Event('resize'));
+        });
+        expect(await page.evaluate(() => window.devicePixelRatio)).toBe(2);
+        const dynamicDprBacking = expectedOverviewBackingDimensions(0.45, 2);
+        await expect.soft(canvas, 'Canvas backing should respond when effective DPR changes after load')
+          .toHaveAttribute('width', String(dynamicDprBacking.width));
+        await expect.soft(canvas, 'Canvas backing should update both dimensions when effective DPR changes after load')
+          .toHaveAttribute('height', String(dynamicDprBacking.height));
+      }
+    } finally {
+      await context.close();
+    }
+  }
+});
+
+test('174 items: DPR2 overview Canvas releases backing in detail and restores it at the scene scale', async ({ browser }) => {
+  const context = await browser.newContext({
+    baseURL: 'http://127.0.0.1:5173',
+    viewport: { width: 1440, height: 900 },
+    deviceScaleFactor: 2,
+  });
+  try {
+    const page = await context.newPage();
+    const fixture = createWorldFixture(174);
+    await installFixtureInIsolatedPage(page, fixture, { panX: 0, panY: 0, scale: 0.8 });
+
+    const canvas = page.getByTestId('world-overview-canvas');
+    const scene = page.locator('.world-scene');
+    const expectCanvasCssWorldDimensions = async () => {
+      const cssDimensions = await canvas.evaluate((element) => ({
+        width: getComputedStyle(element).width,
+        height: getComputedStyle(element).height,
+      }));
+      expect(cssDimensions).toEqual({
+        width: `${WORLD_BOUNDS.width}px`,
+        height: `${WORLD_BOUNDS.height}px`,
+      });
+    };
+    await expect(canvas).toBeHidden();
+    await expect(canvas).toHaveAttribute('width', '1');
+    await expect(canvas).toHaveAttribute('height', '1');
+    await expectCanvasCssWorldDimensions();
+
+    const zoomOut = page.getByRole('button', { name: 'Zoom out' });
+    for (let index = 0; index < 10; index += 1) {
+      if ((await readSceneCamera(scene)).scale <= 0.4) break;
+      await zoomOut.click();
+    }
+    await expect(canvas, 'zooming out past the overview threshold should activate Canvas').toBeVisible();
+    const firstOverviewScale = (await readSceneCamera(scene)).scale;
+    const firstExpectedBacking = expectedOverviewBackingDimensions(firstOverviewScale, 2);
+    await expect(canvas).toHaveAttribute('width', String(firstExpectedBacking.width));
+    await expect(canvas).toHaveAttribute('height', String(firstExpectedBacking.height));
+
+    const zoomIn = page.getByRole('button', { name: 'Zoom in' });
+    for (let index = 0; index < 10; index += 1) {
+      if ((await readSceneCamera(scene)).scale >= 0.5) break;
+      await zoomIn.click();
+    }
+    await expect(canvas, 'returning to detail should hide Canvas').toBeHidden();
+    await expect(canvas).toHaveAttribute('width', '1');
+    await expect(canvas).toHaveAttribute('height', '1');
+    await expectCanvasCssWorldDimensions();
+
+    for (let index = 0; index < 10; index += 1) {
+      if ((await readSceneCamera(scene)).scale <= 0.4) break;
+      await zoomOut.click();
+    }
+    await expect(canvas, 're-entering overview should restore Canvas backing').toBeVisible();
+    const restoredOverviewScale = (await readSceneCamera(scene)).scale;
+    const restoredExpectedBacking = expectedOverviewBackingDimensions(restoredOverviewScale, 2);
+    await expect(canvas).toHaveAttribute('width', String(restoredExpectedBacking.width));
+    await expect(canvas).toHaveAttribute('height', String(restoredExpectedBacking.height));
+    await expectCanvasCssWorldDimensions();
+
+    const canvasOnlyTarget = await findVisibleCanvasOnlyItem(page, fixture.items);
+    expect(canvasOnlyTarget, 'the reopened overview should paint a visible item outside the DOM overlay set')
+      .not.toBeNull();
+    await page.mouse.click(canvasOnlyTarget.clientX, canvasOnlyTarget.clientY);
+    await expect(page.getByTestId('item-inspector')).toContainText(canvasOnlyTarget.item.title);
+  } finally {
+    await context.close();
+  }
 });
 
 test('5,024 items: pan and wheel use frame-bounded culling with settled camera commits', async ({ page }) => {

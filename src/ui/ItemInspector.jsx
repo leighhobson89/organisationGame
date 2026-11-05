@@ -15,6 +15,39 @@ export function ItemInspector({ item, selectedItems = [], destinations, scratchP
   const selectedObjectLabel = selectedCount === 1 ? 'object' : 'objects';
   const selectedItemLabel = selectedCount === 1 ? 'item' : 'items';
 
+  const handleEvidenceKeyDown = (event) => {
+    const region = event.currentTarget;
+    const pageStep = Math.max(1, Math.floor(region.clientHeight * 0.75));
+    let nextScrollTop;
+
+    switch (event.key) {
+      case 'ArrowDown':
+        nextScrollTop = region.scrollTop + 40;
+        break;
+      case 'ArrowUp':
+        nextScrollTop = region.scrollTop - 40;
+        break;
+      case 'PageDown':
+        nextScrollTop = region.scrollTop + pageStep;
+        break;
+      case ' ':
+        nextScrollTop = region.scrollTop + (event.shiftKey ? -pageStep : pageStep);
+        break;
+      case 'PageUp':
+      case 'Home':
+        nextScrollTop = event.key === 'Home' ? 0 : region.scrollTop - pageStep;
+        break;
+      case 'End':
+        nextScrollTop = region.scrollHeight;
+        break;
+      default:
+        return;
+    }
+
+    event.preventDefault();
+    region.scrollTop = nextScrollTop;
+  };
+
   useEffect(() => {
     setTargetKey('workspace');
     if (item?.id !== focusMoveItemId) return undefined;
@@ -45,13 +78,20 @@ export function ItemInspector({ item, selectedItems = [], destinations, scratchP
   return (
     <aside className="panel item-inspector" aria-label="Selected item details" data-testid="item-inspector">
       <header className="panel-heading">
-        <div><p className="eyebrow">Object inspector</p><h2>{isGroupSelection ? `${selectedCount} ${selectedObjectLabel} selected` : item.title ?? 'Uncatalogued object'}</h2></div>
+        <div><p className="eyebrow">Object inspector</p><h2 aria-label={isGroupSelection ? `${selectedCount} ${selectedObjectLabel} selected` : undefined}>{isGroupSelection ? `${selectedCount} selected` : item.title ?? 'Uncatalogued object'}</h2></div>
         <button type="button" className="panel-close" aria-label="Close item inspector" onClick={onClose}>×</button>
       </header>
       {isGroupSelection ? (
-        <div className="item-inspector__details" data-testid="selected-items-summary">
+        <div
+          className="item-inspector__details"
+          data-testid="selected-items-summary"
+          role="region"
+          aria-label="Selected objects and evidence"
+          tabIndex={0}
+          onKeyDown={handleEvidenceKeyDown}
+        >
           <p>{selectedCount} {selectedObjectLabel} {selectedCount === 1 ? 'is' : 'are'} selected. Each object will be checked against the destination separately.</p>
-          <ul className="selected-item-list" aria-label="Selected objects and evidence">
+          <ul className="selected-item-list">
             {selectedItems.map((selectedItem) => (
               <li key={selectedItem.id}>
                 <strong>{selectedItem.title ?? 'Uncatalogued object'}</strong>
@@ -86,13 +126,19 @@ export function ItemInspector({ item, selectedItems = [], destinations, scratchP
       <div className="item-inspector__actions">
         <form className="move-item-form" onSubmit={handleMoveSubmit}>
           <label htmlFor="move-target">{isGroupSelection
-            ? `Move selected ${selectedObjectLabel} to destination or work surface`
+            ? 'Move selected objects to'
             : 'Move to destination or work surface'}</label>
           <select ref={moveTargetRef} id="move-target" data-testid="move-target" value={targetKey} onChange={(event) => setTargetKey(event.target.value)}>
             {targets.map((target) => <option key={target.key} value={target.kind === 'workspace' ? target.key : target.id}>{target.label}</option>)}
           </select>
-          <button ref={moveButtonRef} type="submit" className="primary-control" data-testid={isGroupSelection ? 'move-selected-items' : 'move-item'}>
-            {isGroupSelection ? `Move ${selectedCount} selected ${selectedItemLabel}` : 'Move item'}
+          <button
+            ref={moveButtonRef}
+            type="submit"
+            className="primary-control"
+            data-testid={isGroupSelection ? 'move-selected-items' : 'move-item'}
+            aria-label={isGroupSelection ? `Move ${selectedCount} selected ${selectedItemLabel}` : undefined}
+          >
+            {isGroupSelection ? 'Move' : 'Move item'}
           </button>
         </form>
         {!isGroupSelection && <button type="button" className="text-control" onClick={() => onFocus(item)}>Focus this object in the lab</button>}

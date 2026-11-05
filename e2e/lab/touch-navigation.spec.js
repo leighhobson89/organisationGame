@@ -8,7 +8,7 @@ const fixtureMarker = 'palimpsest-lab.touch-navigation-fixture-seeded';
 const defaultCamera = { panX: 0, panY: 0, scale: 0.5 };
 const calibrationItemId = 'calibration-card-01';
 
-function createTouchFixture({ camera = defaultCamera, dragItem = false } = {}) {
+function createTouchFixture({ camera = defaultCamera, dragItem = false, canvasOnlyItemId } = {}) {
   const state = createNewGameState();
   state.items.forEach((item, index) => {
     item.position = {
@@ -21,6 +21,19 @@ function createTouchFixture({ camera = defaultCamera, dragItem = false } = {}) {
     const item = state.items.find((entry) => entry.id === calibrationItemId);
     if (!item) throw new Error(`Unable to find touch-drag fixture item ${calibrationItemId}.`);
     item.position = { x: 260, y: 230 };
+  }
+
+  if (canvasOnlyItemId) {
+    const canvasOnlyItem = state.items.find((entry) => entry.id === canvasOnlyItemId);
+    if (!canvasOnlyItem) throw new Error(`Unable to find Canvas-only fixture item ${canvasOnlyItemId}.`);
+    state.items = [...state.items.filter((entry) => entry.id !== canvasOnlyItemId), canvasOnlyItem];
+    state.items.slice(0, 64).forEach((item, index) => {
+      item.position = {
+        x: (index % 4) * 110,
+        y: Math.floor(index / 4) * 75,
+      };
+    });
+    canvasOnlyItem.position = { x: 700, y: 500 };
   }
 
   state.camera = { ...camera };
@@ -75,6 +88,29 @@ async function readSceneCamera(page) {
     const matrix = new DOMMatrixReadOnly(getComputedStyle(scene).transform);
     return { panX: matrix.e, panY: matrix.f, scale: matrix.a };
   });
+}
+
+async function getCanvasItemTouchPoint(page, item, expectedCanvasItemCount) {
+  const canvas = page.getByTestId('world-overview-canvas');
+  await expect(canvas).toBeVisible();
+  await expect(canvas).toHaveAttribute('data-rendered-item-count', String(expectedCanvasItemCount));
+  await expect(page.locator('.world-scene .lab-object')).toHaveCount(64);
+  await expect(page.getByTestId(`lab-item-${item.id}`)).toHaveCount(0);
+
+  const viewport = await page.getByTestId('world-viewport').boundingBox();
+  expect(viewport).not.toBeNull();
+  const camera = await readSceneCamera(page);
+  expect(camera.scale).toBeCloseTo(0.4, 4);
+
+  const point = {
+    x: viewport.x + camera.panX + (item.position.x + item.width / 2) * camera.scale,
+    y: viewport.y + camera.panY + (item.position.y + item.height / 2) * camera.scale,
+  };
+  expect(point.x).toBeGreaterThan(viewport.x);
+  expect(point.x).toBeLessThan(viewport.x + viewport.width);
+  expect(point.y).toBeGreaterThan(viewport.y);
+  expect(point.y).toBeLessThan(viewport.y + viewport.height);
+  return point;
 }
 
 function expectCameraClose(actual, expected) {
@@ -305,6 +341,88 @@ test('a coarse-pointer drag files a card into its correct destination', async ({
     ]);
 
     const originalItem = state.items.find((entry) => entry.id === calibrationItemId);
+    expect(savedItem.position).not.toEqual(originalItem.position);
+  });
+});
+
+test('a coarse-pointer tap selects a Canvas-rendered card without moving or filing it', async ({ browser }) => {
+  await withTouchLab(browser, {
+    camera: { panX: 0, panY: 0, scale: 0.4 },
+    canvasOnlyItemId: calibrationItemId,
+  }, async ({ page, state, client }) => {
+    const originalItem = state.items.find((item) => item.id === calibrationItemId);
+    const point = await getCanvasItemTouchPoint(page, originalItem, state.items.length);
+    const cameraBefore = await readSceneCamera(page);
+    await observeAudioEvents(page);
+
+    await dispatchTouch(client, 'touchStart', [{ id: 1, ...point }]);
+    await endTouches(client);
+
+    const inspector = page.getByTestId('item-inspector');
+    await expect(inspector).toBeVisible();
+    await expect(inspector).toContainText(originalItem.title);
+    const selectedItem = page.getByTestId(`lab-item-${calibrationItemId}`);
+    await expect(selectedItem).toHaveAttribute('aria-pressed', 'true');
+    expectCameraClose(await readSceneCamera(page), cameraBefore);
+
+    const savedState = decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey));
+    expectCameraClose(savedState.camera, cameraBefore);
+    const savedItem = savedState.items.find((entry) => entry.id === calibrationItemId);
+    expect(savedItem.position).toEqual(originalItem.position);
+    expect(savedItem.placement).toEqual(originalItem.placement);
+    expect(savedItem.validation).toEqual(originalItem.validation);
+    expect((await readAudioEventTypes(page)).filter((type) => type === 'item.pickup' || type === 'item.drop'))
+      .toEqual([], 'a Canvas touch selection must not start or complete an item drag');
+  });
+});
+
+test('a coarse-pointer drag files a Canvas-rendered card into its correct destination', async ({ browser }) => {
+  await withTouchLab(browser, {
+    camera: { panX: 0, panY: 0, scale: 0.4 },
+    canvasOnlyItemId: calibrationItemId,
+  }, async ({ page, state, client }) => {
+    const originalItem = state.items.find((item) => item.id === calibrationItemId);
+    const start = await getCanvasItemTouchPoint(page, originalItem, state.items.length);
+    const destination = page.getByTestId('destination-cabinet-calibration');
+    await expect(destination).toBeVisible();
+    const destinationBounds = await destination.boundingBox();
+    expect(destinationBounds).not.toBeNull();
+
+    const finish = {
+      x: destinationBounds.x + destinationBounds.width / 2,
+      y: destinationBounds.y + destinationBounds.height / 2,
+    };
+    const cameraBefore = await readSceneCamera(page);
+    await observeAudioEvents(page);
+
+    await dispatchTouch(client, 'touchStart', [{ id: 1, ...start }]);
+    const dragSteps = 8;
+    for (let step = 1; step <= dragSteps; step += 1) {
+      const progress = step / dragSteps;
+      await dispatchTouch(client, 'touchMove', [{
+        id: 1,
+        x: start.x + (finish.x - start.x) * progress,
+        y: start.y + (finish.y - start.y) * progress,
+      }]);
+    }
+    await endTouches(client);
+
+    await expect(destination).toHaveAttribute('aria-label', /1 of 8 objects placed/i);
+    await expect(page.getByTestId('autosave-status')).toHaveText('Saved just now');
+    expectCameraClose(await readSceneCamera(page), cameraBefore);
+
+    const savedState = decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey));
+    expectCameraClose(savedState.camera, cameraBefore);
+    const savedItem = savedState.items.find((entry) => entry.id === calibrationItemId);
+    expect(savedItem).toMatchObject({
+      placement: { kind: 'destination', destinationId: 'cabinet-calibration' },
+      validation: 'correct',
+    });
+    expect(await readAudioEventTypes(page)).toEqual([
+      'item.pickup',
+      'item.drop',
+      'item.placement.correct',
+    ]);
     expect(savedItem.position).not.toEqual(originalItem.position);
   });
 });

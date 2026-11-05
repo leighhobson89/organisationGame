@@ -44,8 +44,8 @@ export function DestinationCard({ destination, placedCount, complete, guided = f
         </div>
         {complete && <span className="destination-complete" aria-label="Collection restored">✓ Restored</span>}
       </div>
-      <button type="button" className="destination-focus" onClick={() => onFocus(destination)}>
-        Focus cabinet
+      <button type="button" className="destination-focus" aria-label={`Focus ${destination.label}`} onClick={() => onFocus(destination)}>
+        Focus
       </button>
     </section>
   );

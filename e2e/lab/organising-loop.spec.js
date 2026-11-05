@@ -187,7 +187,9 @@ test('accessible multi-selection completes a collection with one reward and puzz
     'selection state is transient and must stay outside the autosave');
 
   await page.getByRole('combobox', { name: /destination or work surface/i }).selectOption(correctDestination);
-  await page.getByRole('button', { name: 'Move 2 selected items', exact: true }).click();
+  const moveSelectedButton = page.getByRole('button', { name: 'Move 2 selected items', exact: true });
+  await moveSelectedButton.focus();
+  await moveSelectedButton.press('Enter');
 
   await expect(selectionToggle).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByTestId('multi-selection-count')).toHaveCount(0);
@@ -212,6 +214,43 @@ test('accessible multi-selection completes a collection with one reward and puzz
   expect(savedState.progress.completedCollectionIds.filter((id) => id === calibration.id)).toHaveLength(1);
   expect(savedState.progress.unlockedPuzzleIds.filter((id) => id === 'pulse-sequence')).toHaveLength(1);
   expect(savedState.progress.skillPoints).toBe(1);
+
+  const puzzle = page.getByTestId('puzzle-panel');
+  await expect(puzzle).toBeVisible();
+  const firstChoice = puzzle.getByTestId('puzzle-symbol-0');
+  await expect(firstChoice).toBeFocused();
+  const firstChoiceLabel = await firstChoice.innerText();
+  await firstChoice.press('Enter');
+  await expect(puzzle.locator('.puzzle-slot').first()).toHaveText(firstChoiceLabel);
+});
+
+test('keyboard item move that unlocks a puzzle focuses its first choice', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const state = createPartiallyFiledCalibrationState({ filedCount: 7 });
+  await page.addInitScript(({ key, value }) => window.localStorage.setItem(key, value), {
+    key: autoSaveKey,
+    value: encodeSave(state),
+  });
+  await page.goto('/');
+  await expect(page.getByTestId('autosave-status')).toHaveText('Saved just now');
+
+  const finalCard = page.getByTestId('lab-item-calibration-card-08');
+  await finalCard.focus();
+  await finalCard.press('Enter');
+  await expect(page.getByTestId('item-inspector')).toBeVisible();
+
+  await page.getByTestId('move-target').selectOption(correctDestination);
+  const moveButton = page.getByRole('button', { name: 'Move item', exact: true });
+  await moveButton.focus();
+  await moveButton.press('Enter');
+
+  const puzzle = page.getByTestId('puzzle-panel');
+  await expect(puzzle).toBeVisible();
+  const firstChoice = puzzle.getByTestId('puzzle-symbol-0');
+  await expect(firstChoice).toBeFocused();
+  const firstChoiceLabel = await firstChoice.innerText();
+  await firstChoice.press('Enter');
+  await expect(puzzle.locator('.puzzle-slot').first()).toHaveText(firstChoiceLabel);
 });
 
 test('a mixed batch validates each item independently at its own destination', async ({ page }) => {
@@ -303,6 +342,103 @@ test('pointer selection from the overview canvas exposes the canvas-only item wi
   await expect(page.getByTestId('multi-selection-count')).toHaveText('1 selected');
   expect(await readAudioEventTypes(page)).not.toContain('item.pickup',
     'a canvas selection must not start an item drag');
+});
+
+test('mouse dragging a canvas-only calibration card files it correctly without moving the camera', async ({ page }) => {
+  const viewportSize = { width: 3000, height: 1800 };
+  await page.setViewportSize(viewportSize);
+  const state = createNewGameState();
+  const itemIndex = state.items.findIndex((entry) => entry.id === firstCalibrationCard);
+  expect(itemIndex, `the fixture should contain ${firstCalibrationCard}`).toBeGreaterThanOrEqual(0);
+  const [item] = state.items.splice(itemIndex, 1);
+  state.items.slice(0, 64).forEach((entry, index) => {
+    entry.position = {
+      x: (index % 4) * 110,
+      y: Math.floor(index / 4) * 75,
+    };
+  });
+  item.position = findIsolatedWorldPosition(item, state.items);
+  state.items.push(item);
+  const itemIdsBefore = state.items.map((entry) => entry.id);
+  const scale = 0.4;
+  state.camera = {
+    scale,
+    panX: viewportSize.width / 2 - (WORLD_BOUNDS.x + WORLD_BOUNDS.width / 2) * scale,
+    panY: viewportSize.height / 2 - (WORLD_BOUNDS.y + WORLD_BOUNDS.height / 2) * scale,
+  };
+  await page.addInitScript(({ key, value }) => window.localStorage.setItem(key, value), {
+    key: autoSaveKey,
+    value: encodeSave(state),
+  });
+  await page.goto('/');
+  await observeAudioEvents(page);
+  await expect(page.getByTestId('autosave-status')).toHaveText('Saved just now');
+
+  const canvas = page.getByTestId('world-overview-canvas');
+  await expect(canvas).toBeVisible();
+  await expect(canvas).toHaveAttribute('data-rendered-item-count', String(state.items.length));
+  await expect(page.locator('.world-scene .lab-object')).toHaveCount(64);
+  const overlayItemIds = await page.locator('.world-scene .lab-object').evaluateAll((buttons) => (
+    buttons.map((button) => button.dataset.itemId)
+  ));
+  expect(overlayItemIds, 'the isolated calibration card should be drawn by Canvas at 0.4 scale')
+    .not.toContain(item.id);
+
+  const viewport = page.getByTestId('world-viewport');
+  const viewportBox = await viewport.boundingBox();
+  expect(viewportBox).not.toBeNull();
+  const start = {
+    x: viewportBox.x + state.camera.panX + (item.position.x + item.width / 2) * scale,
+    y: viewportBox.y + state.camera.panY + (item.position.y + item.height / 2) * scale,
+  };
+  const destination = DESTINATIONS.find((entry) => entry.id === correctDestination);
+  const drop = {
+    x: viewportBox.x + state.camera.panX + (destination.position.x + destination.width / 2) * scale,
+    y: viewportBox.y + state.camera.panY + (destination.position.y + destination.height / 2) * scale,
+  };
+  for (const [point, description] of [[start, 'drag start'], [drop, 'destination drop']]) {
+    expect(point.x, `${description} should be inside the viewport`).toBeGreaterThan(viewportBox.x);
+    expect(point.x, `${description} should be inside the viewport`).toBeLessThan(viewportBox.x + viewportBox.width);
+    expect(point.y, `${description} should be inside the viewport`).toBeGreaterThan(viewportBox.y);
+    expect(point.y, `${description} should be inside the viewport`).toBeLessThan(viewportBox.y + viewportBox.height);
+  }
+
+  const scene = page.locator('.world-scene');
+  const cameraTransformBefore = await scene.evaluate((element) => element.style.transform);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(drop.x, drop.y, { steps: 8 });
+  await page.mouse.up();
+
+  await expect(page.getByTestId('autosave-status')).toHaveText('Saved just now');
+  const savedState = decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey));
+  const savedCard = savedState.items.find((entry) => entry.id === item.id);
+  expect(savedCard).toMatchObject({
+    validation: 'correct',
+    placement: { kind: 'destination', destinationId: correctDestination },
+  });
+  expect(Number.isInteger(savedCard.placement.slotIndex), 'the filed card should have an assigned destination slot')
+    .toBe(true);
+  expect(savedCard.position).toEqual(getTargetSlotPosition({
+    target: { kind: 'destination', id: correctDestination },
+    item: savedCard,
+    slotIndex: savedCard.placement.slotIndex,
+    destinations: DESTINATIONS,
+    scratchPads: SCRATCH_PADS,
+  }));
+  expect(savedState.items.map((entry) => entry.id), 'placing the card should preserve the fixture item order')
+    .toEqual(itemIdsBefore);
+  expect(savedState.camera, 'the saved camera should remain unchanged after the drag')
+    .toEqual(state.camera);
+  expect(await scene.evaluate((element) => element.style.transform), 'the visible camera transform should remain unchanged')
+    .toBe(cameraTransformBefore);
+  await expect(page.getByTestId(`destination-${correctDestination}`))
+    .toHaveAttribute('aria-label', /1 of 8 objects placed/i);
+  await expect.poll(() => readAudioEventTypes(page)).toEqual([
+    'item.pickup',
+    'item.drop',
+    'item.placement.correct',
+  ]);
 });
 
 test('entering multi-selection carries the current item into the group and allows deselection', async ({ page }) => {

@@ -76,20 +76,28 @@ export function ItemFinder({ items, onSelectItem, onClose }) {
       />
       <p className="item-finder-count">{filteredItems.length} matching items</p>
       <ul className="item-finder-results">
-        {results.map((item) => (
-          <li key={item.id}>
-            <button
-              type="button"
-              className="item-finder-result"
-              data-testid={`item-finder-result-${item.id}`}
-              aria-label={`${item.title ?? 'Uncatalogued object'}. ${item.family ?? 'Unknown family'}.`}
-              onClick={(event) => onSelectItem(item, { keyboard: event.detail === 0 })}
-            >
-              <span>{item.title ?? 'Uncatalogued object'}</span>
-              <small>{item.family ?? 'Unknown family'}</small>
-            </button>
-          </li>
-        ))}
+        {results.map((item) => {
+          const invalid = item.validation === 'invalid';
+          const title = item.title ?? 'Uncatalogued object';
+          const family = item.family ?? 'Unknown family';
+          return (
+            <li key={item.id}>
+              <button
+                type="button"
+                className="item-finder-result"
+                data-testid={`item-finder-result-${item.id}`}
+                aria-label={`${title}. ${family}.${invalid ? ' Misfiled. Select this result to inspect it and move it somewhere else to correct the record.' : ''}`}
+                onClick={(event) => onSelectItem(item, { keyboard: event.detail === 0 })}
+              >
+                <span>{title}</span>
+                <small>
+                  {family}
+                  {invalid && <span className="item-finder-misfiled-label">Misfiled</span>}
+                </small>
+              </button>
+            </li>
+          );
+        })}
       </ul>
       <nav className="item-finder-pagination" aria-label="Item search pages">
         <button type="button" aria-label="Previous page" disabled={safePage === 0} onClick={() => handlePageChange(safePage - 1)}>Previous</button>

@@ -7,6 +7,99 @@ import { PREFERENCES_STORAGE_KEY } from '../../src/game/preferences/preferences.
 
 const autoSaveKey = 'palimpsest-laboratory.autosave.v1';
 
+async function installFakeAudioContext(page) {
+  await page.addInitScript(() => {
+    window.__audioPreviewTrace = {
+      contextsCreated: 0,
+      resumeCalls: 0,
+      scheduledOscillators: [],
+      scheduledStops: [],
+      connections: 0,
+    };
+
+    class FakeAudioParam {
+      constructor() {
+        this.value = 0;
+      }
+
+      setValueAtTime(value) {
+        this.value = value;
+      }
+
+      linearRampToValueAtTime(value) {
+        this.value = value;
+      }
+    }
+
+    class FakeAudioNode {
+      connect(destination) {
+        window.__audioPreviewTrace.connections += 1;
+        return destination;
+      }
+
+      disconnect() {}
+    }
+
+    class FakeOscillator extends FakeAudioNode {
+      constructor() {
+        super();
+        this.type = 'sine';
+        this.frequency = new FakeAudioParam();
+        this.onended = null;
+      }
+
+      start(time = 0) {
+        window.__audioPreviewTrace.scheduledOscillators.push({
+          frequency: this.frequency.value,
+          type: this.type,
+          time,
+        });
+      }
+
+      stop(time = 0) {
+        window.__audioPreviewTrace.scheduledStops.push(time);
+      }
+    }
+
+    class FakeGain extends FakeAudioNode {
+      constructor() {
+        super();
+        this.gain = new FakeAudioParam();
+      }
+    }
+
+    class FakeAudioContext {
+      constructor() {
+        window.__audioPreviewTrace.contextsCreated += 1;
+        this.currentTime = 0;
+        this.destination = {};
+        this.state = 'suspended';
+      }
+
+      createOscillator() {
+        return new FakeOscillator();
+      }
+
+      createGain() {
+        return new FakeGain();
+      }
+
+      resume() {
+        window.__audioPreviewTrace.resumeCalls += 1;
+        this.state = 'running';
+        return Promise.resolve();
+      }
+
+      close() {
+        this.state = 'closed';
+        return Promise.resolve();
+      }
+    }
+
+    window.AudioContext = FakeAudioContext;
+  });
+}
+
 function createAlmostCompleteFixture() {
   const fresh = createNewGameState();
   const finalItem = fresh.items.find((item) => !item.collectionId);
@@ -110,7 +203,7 @@ async function expectSettingsControlUsable(dialog, control, description, { withi
   expect(geometry.hitTarget, `${description} should be hit-testable at its center`).toBe(true);
 }
 
-for (const [textPercent, textScale] of [[125, '1.25'], [150, '1.5']]) {
+for (const [textPercent, textScale] of [[125, '1.25'], [150, '1.5'], [175, '1.75']]) {
   test(`settings persist ${textPercent}% text size separately from game saves and restore focus on Escape`, async ({ page }) => {
     await page.goto('/');
 
@@ -121,7 +214,7 @@ for (const [textPercent, textScale] of [[125, '1.25'], [150, '1.5']]) {
 
     const textSize = page.getByLabel('Text size');
     expect(await textSize.locator('option').evaluateAll((options) => options.map((option) => option.value)))
-      .toEqual(['1', '1.125', '1.25', '1.5']);
+      .toEqual(['1', '1.125', '1.25', '1.5', '1.75', '2']);
     const baselineFontSizes = await page.evaluate(() => ({
       root: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
       body: Number.parseFloat(getComputedStyle(document.body).fontSize),
@@ -166,6 +259,57 @@ for (const [textPercent, textScale] of [[125, '1.25'], [150, '1.5']]) {
     expect(JSON.stringify(savedGame)).not.toMatch(/textScale|reduceMotion|soundEffectsEnabled/);
   });
 }
+
+test('Settings exposes and persists 200% text size after reload in a compact scrollable dialog', async ({ page }) => {
+  const viewport = { width: 320, height: 360 };
+  await page.setViewportSize(viewport);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+  const content = dialog.locator('.settings-dialog__content');
+  const textSize = dialog.getByLabel('Text size');
+  const soundEffects = dialog.getByRole('checkbox', { name: 'Sound effects' });
+  const done = dialog.getByRole('button', { name: 'Done', exact: true });
+  const optionValues = await textSize.locator('option').evaluateAll((options) => options.map((option) => option.value));
+  expect(optionValues).toContain('1.75');
+  expect(optionValues).toContain('2');
+
+  await textSize.selectOption('2');
+  await expect(page.locator('html')).toHaveCSS('--text-scale', '2');
+  await expect(textSize).toHaveValue('2');
+  await expectSettingsControlUsable(dialog, textSize, '200% Text size control', { withinContent: true });
+
+  const contentLayout = await content.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+    scrollTop: element.scrollTop,
+    overflowY: getComputedStyle(element).overflowY,
+  }));
+  expect(contentLayout.scrollWidth, '200% Settings content should not overflow horizontally')
+    .toBeLessThanOrEqual(contentLayout.clientWidth + 1);
+  expect(contentLayout.scrollHeight, '200% Settings should expose lower preferences in its scrollable content')
+    .toBeGreaterThan(contentLayout.clientHeight);
+  expect(['auto', 'scroll']).toContain(contentLayout.overflowY);
+
+  await soundEffects.scrollIntoViewIfNeeded();
+  await soundEffects.focus();
+  await expectSettingsControlUsable(dialog, soundEffects, 'Sound effects control at 200%', { withinContent: true });
+  await expect.poll(() => content.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(contentLayout.scrollTop);
+
+  expect(JSON.parse(await page.evaluate((key) => window.localStorage.getItem(key), PREFERENCES_STORAGE_KEY)))
+    .toEqual({ version: 1, textScale: 2, reduceMotion: false, soundEffectsEnabled: false });
+  await done.click();
+  await expect(dialog).toHaveCount(0);
+
+  await page.reload();
+  await expect(page.locator('html')).toHaveCSS('--text-scale', '2');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(page.getByLabel('Text size')).toHaveValue('2');
+});
 
 test('Settings recovers Tab focus when focus moves outside the dialog', async ({ page }) => {
   await page.goto('/');
@@ -385,6 +529,60 @@ test('the OS reduced-motion setting is honored when Always reduce motion is off'
   await completeLastItem(page, fixture.finalItem);
 
   await expect(page.getByTestId('completion-sequence')).toHaveAttribute('data-motion', 'reduced');
+});
+
+test('Settings plays the sound preview through the Web Audio adapter', async ({ page }) => {
+  await installFakeAudioContext(page);
+  await page.goto('/');
+  expect(await page.evaluate(() => window.__audioPreviewTrace.contextsCreated)).toBe(0);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await settings.getByRole('checkbox', { name: 'Sound effects' }).check();
+  const traceAfterEnable = await page.evaluate(() => window.__audioPreviewTrace);
+  expect(traceAfterEnable.contextsCreated).toBe(1);
+  expect(traceAfterEnable.resumeCalls).toBeGreaterThan(0);
+  expect(traceAfterEnable.scheduledOscillators).toHaveLength(0);
+
+  const previewButton = settings.getByRole('button', { name: 'Preview sound' });
+  await expect(previewButton).toBeEnabled();
+  await previewButton.click();
+
+  await expect(page.getByRole('status', { name: 'Audio preview status' })).toHaveText('Preview played');
+  const trace = await page.evaluate(() => window.__audioPreviewTrace);
+  expect(trace.contextsCreated).toBe(1);
+  expect(trace.resumeCalls).toBeGreaterThan(0);
+  expect(trace.scheduledOscillators.map(({ frequency }) => frequency)).toEqual([560, 740]);
+  expect(trace.scheduledStops).toHaveLength(2);
+  expect(trace.connections).toBeGreaterThanOrEqual(4);
+});
+
+test('keyboard can enable sound effects and play the Settings preview', async ({ page }) => {
+  await installFakeAudioContext(page);
+  await page.goto('/');
+  expect(await page.evaluate(() => window.__audioPreviewTrace.contextsCreated)).toBe(0);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  const soundEffects = settings.getByRole('checkbox', { name: 'Sound effects' });
+  await soundEffects.focus();
+  await page.keyboard.press('Space');
+  await expect(soundEffects).toBeChecked();
+
+  const traceAfterEnable = await page.evaluate(() => window.__audioPreviewTrace);
+  expect(traceAfterEnable.contextsCreated).toBe(1);
+  expect(traceAfterEnable.resumeCalls).toBeGreaterThan(0);
+  expect(traceAfterEnable.scheduledOscillators).toHaveLength(0);
+
+  const previewButton = settings.getByRole('button', { name: 'Preview sound' });
+  await previewButton.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('status', { name: 'Audio preview status' })).toHaveText('Preview played');
+
+  const trace = await page.evaluate(() => window.__audioPreviewTrace);
+  expect(trace.scheduledOscillators.map(({ frequency }) => frequency)).toEqual([560, 740]);
+  expect(trace.scheduledStops).toHaveLength(2);
+  expect(trace.connections).toBeGreaterThanOrEqual(4);
 });
 
 test('a live OS reduced-motion change updates the open ending when the user option is off', async ({ page }) => {

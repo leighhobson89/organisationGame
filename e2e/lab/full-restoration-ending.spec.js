@@ -111,9 +111,16 @@ async function openEndingFromAlmostCompleteFixture(page, { textScale = 1.25 } = 
   return ending;
 }
 
-async function expectFullyReachableWithinEndingScrollArea(element) {
-  await element.scrollIntoViewIfNeeded();
-  const bounds = await element.evaluate((node) => {
+async function expectReachableWithinEndingScrollArea(element) {
+  const dimensions = await element.evaluate((node) => {
+    const scrollArea = node.closest('.completion-sequence__dialog');
+    return {
+      elementHeight: node.getBoundingClientRect().height,
+      scrollAreaClientHeight: scrollArea.clientHeight,
+    };
+  });
+
+  const readBounds = () => element.evaluate((node) => {
     const scrollArea = node.closest('.completion-sequence__dialog');
     const elementRect = node.getBoundingClientRect();
     const scrollRect = scrollArea.getBoundingClientRect();
@@ -125,8 +132,39 @@ async function expectFullyReachableWithinEndingScrollArea(element) {
       scrollBottom: scrollTop + scrollArea.clientHeight,
     };
   });
-  expect(bounds.top, 'content should be reachable below the dialog top edge').toBeGreaterThanOrEqual(bounds.scrollTop - 1);
-  expect(bounds.bottom, 'content should be reachable above the dialog bottom edge').toBeLessThanOrEqual(bounds.scrollBottom + 1);
+
+  if (dimensions.elementHeight <= dimensions.scrollAreaClientHeight + 1) {
+    await element.scrollIntoViewIfNeeded();
+    const bounds = await readBounds();
+    expect(bounds.top, 'content should be reachable below the dialog top edge').toBeGreaterThanOrEqual(bounds.scrollTop - 1);
+    expect(bounds.bottom, 'content should be reachable above the dialog bottom edge').toBeLessThanOrEqual(bounds.scrollBottom + 1);
+    return;
+  }
+
+  await element.evaluate((node) => {
+    const scrollArea = node.closest('.completion-sequence__dialog');
+    const elementTop = node.getBoundingClientRect().top;
+    const scrollTop = scrollArea.getBoundingClientRect().top + scrollArea.clientTop;
+    scrollArea.scrollTop += elementTop - scrollTop;
+  });
+  const startBounds = await readBounds();
+  expect(startBounds.top, 'the start of tall content should be reachable below the dialog top edge')
+    .toBeGreaterThanOrEqual(startBounds.scrollTop - 1);
+  expect(startBounds.top, 'the start of tall content should be inside the dialog scrollport')
+    .toBeLessThan(startBounds.scrollBottom);
+
+  await element.evaluate((node) => {
+    const scrollArea = node.closest('.completion-sequence__dialog');
+    const elementBottom = node.getBoundingClientRect().bottom;
+    const scrollTop = scrollArea.getBoundingClientRect().top + scrollArea.clientTop;
+    const scrollBottom = scrollTop + scrollArea.clientHeight;
+    scrollArea.scrollTop += elementBottom - scrollBottom;
+  });
+  const endBounds = await readBounds();
+  expect(endBounds.bottom, 'the end of tall content should be reachable above the dialog bottom edge')
+    .toBeLessThanOrEqual(endBounds.scrollBottom + 1);
+  expect(endBounds.bottom, 'the end of tall content should be inside the dialog scrollport')
+    .toBeGreaterThan(endBounds.scrollTop);
 }
 
 function createMisfiledItemState() {
@@ -227,6 +265,78 @@ const incompleteCompletionScenarios = [
   },
 ];
 
+test('the Engine ending animates its trace and core once, then holds a static projection for reduced motion', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  const ending = await openEndingFromAlmostCompleteFixture(page, { textScale: 1 });
+  await expect(ending).toHaveAttribute('data-motion', 'full');
+
+  const projection = ending.locator('.completion-sequence__projection');
+  const outerRing = projection.locator('.completion-sequence__projection-ring--outer');
+  const traceArtwork = projection.locator('.completion-sequence__projection-trace');
+  const trace = traceArtwork.locator('path');
+  const core = projection.locator('.completion-sequence__projection-core');
+  const outerRotation = await outerRing.evaluate((node) => {
+    const style = getComputedStyle(node);
+    return {
+      name: style.animationName,
+      duration: style.animationDuration,
+      iterationCount: style.animationIterationCount,
+    };
+  });
+  expect(outerRotation.name, 'the outer ring should keep its brief activation rotation').not.toBe('none');
+  const outerDurationMs = outerRotation.duration.endsWith('ms')
+    ? Number.parseFloat(outerRotation.duration)
+    : Number.parseFloat(outerRotation.duration) * 1000;
+  expect(outerDurationMs, 'the outer ring rotation should have a nonzero duration').toBeGreaterThan(0);
+  expect(outerDurationMs, 'the outer ring rotation should settle within three seconds').toBeLessThanOrEqual(3000);
+  expect(outerRotation.iterationCount, 'the outer ring should rotate once').toBe('1');
+
+  await expect(traceArtwork).toHaveCount(1);
+  await expect(trace).toHaveCount(1);
+  await expect(core).toHaveCount(1);
+  await expect(trace).toBeVisible();
+  await expect(core).toBeVisible();
+
+  for (const { element, animationName } of [
+    { element: trace, animationName: 'completion-trace-form' },
+    { element: core, animationName: 'completion-core-activate' },
+  ]) {
+    const animation = await element.evaluate((node) => {
+      const style = getComputedStyle(node);
+      return {
+        name: style.animationName,
+        duration: style.animationDuration,
+        iterationCount: style.animationIterationCount,
+      };
+    });
+    expect(animation.name).toBe(animationName);
+    const durationMs = animation.duration.endsWith('ms')
+      ? Number.parseFloat(animation.duration)
+      : Number.parseFloat(animation.duration) * 1000;
+    expect(durationMs, `${animationName} should have a nonzero duration`).toBeGreaterThan(0);
+    expect(animation.iterationCount, `${animationName} should run once`).toBe('1');
+  }
+
+  await expect(projection).toHaveAttribute('aria-hidden', 'true');
+  await expect(projection.getByRole('img')).toHaveCount(0);
+  const projectionText = (await projection.evaluate((node) => node.innerText)).trim();
+  const accessibleDialog = await ending.getByRole('dialog').ariaSnapshot();
+  if (projectionText) expect(accessibleDialog).not.toContain(projectionText);
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(ending).toHaveAttribute('data-motion', 'reduced');
+  await expect(trace).toHaveCSS('animation-name', 'none');
+  await expect(core).toHaveCSS('animation-name', 'none');
+  await expect(outerRing).toHaveCSS('animation-name', 'none');
+  await expect(trace).toBeVisible();
+  await expect(trace).toHaveCSS('opacity', '1');
+  const traceDashOffset = await trace.evaluate((node) => Number.parseFloat(getComputedStyle(node).strokeDashoffset));
+  expect(traceDashOffset, 'the reduced-motion trace should remain fully drawn').toBe(0);
+  await expect(core).toBeVisible();
+  await expect(projection).toHaveAttribute('aria-hidden', 'true');
+  await expect(projection.getByRole('img')).toHaveCount(0);
+});
+
 test('the final correct filing triggers the Engine ending once and keeps the restored lab explorable', async ({ page }) => {
   const fixture = createAlmostCompleteFixture();
   await page.addInitScript(({ key, value }) => {
@@ -276,8 +386,8 @@ test('the final correct filing triggers the Engine ending once and keeps the res
   const narrative = ending.locator('.completion-sequence__narrative');
   await expect(narrative).toContainText(/unsent apology.{0,100}(?:fear|worr\w*).{0,50}Elian.{0,50}blame.{0,35}(?:machine|Engine)/i);
   await expect(narrative).toContainText(/Elian.{0,40}blame.{0,30}(?:machine|Engine).{0,45}(?:choice|decision)|(?:choice|decision).{0,45}(?:machine|Engine).{0,50}Elian.{0,40}blame/i);
-  await expect(narrative).toContainText(/(?:records|apology).{0,60}(?:do not|don't|never).{0,50}(?:name|identify|specify|explain).{0,50}(?:choice|decision)/i);
-  await expect(narrative).toContainText(/do not.{0,50}(?:establish|say|show|explain|reveal).{0,60}(?:whether|how).{0,50}choice.{0,70}(?:connected|related|linked|caused|triggered).{0,60}Chaos Event/i);
+  await expect(narrative).toContainText(/(?:best|strongest|clearest) reading.{0,100}(?:choice|decision).{0,80}(?:follow|pursue).{0,100}first stable impression.{0,140}eastward (?:bearing )?survey.{0,120}(?:sealed )?bell chamber/i);
+  await expect(narrative).toContainText(/records? (?:do not|don't) directly name that choice or establish whether it (?:caused|triggered) (?:the )?Chaos Event/i);
   await expect(narrative).not.toContainText(/keep the Engine recording through an unstable echo/i);
   await expect(ending).toContainText(/records?.{0,140}(?:(?:do not|don't|cannot|can't|fail to).{0,50}(?:establish|tell|reveal|show|say)|(?:remain|leave).{0,50}(?:unclear|unknown|unanswered)).{0,100}(?:what began|how.{0,20}began|start(?:ed)?|origin|cause).{0,60}Chaos Event/i);
   await expect(ending).toContainText(/(?:Elian.{0,80}(?:response|reaction|respond(?:ed|s|ing)?|choice|what.{0,20}did next).{0,60}(?:unknown|unrecorded|unclear|unestablished|unresolved|not preserved|not described|open)|(?:unknown|unrecorded|unclear|unestablished|unresolved|not preserved|not described|open).{0,60}Elian.{0,40}(?:response|reaction|respond(?:ed|s|ing)?|choice|what.{0,20}did next))/i);
@@ -314,6 +424,43 @@ test('the final correct filing triggers the Engine ending once and keeps the res
   expect(reloadedSave.progress.solvedPuzzleIds).toEqual(expect.arrayContaining(PUZZLES.map((puzzle) => puzzle.id)));
 });
 
+test('group Inspector completion keeps Escape inert and returns focus to selection after Continue', async ({ page }) => {
+  const fixture = createAlmostCompleteFixture();
+  await page.addInitScript(({ key, value }) => window.localStorage.setItem(key, value), {
+    key: autoSaveKey,
+    value: fixture.encodedSave,
+  });
+  await page.goto('/');
+
+  await page.getByRole('button', { name: 'Find an item', exact: true }).click();
+  const search = page.getByRole('searchbox', { name: 'Search laboratory items' });
+  await search.fill(fixture.finalItem.title);
+  await page.getByTestId(`item-finder-result-${fixture.finalItem.id}`).click();
+  await expect(page.getByTestId('item-inspector')).toContainText(fixture.finalItem.title);
+
+  const selectionToggle = page.getByTestId('multi-selection-toggle');
+  await selectionToggle.click();
+  await expect(selectionToggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('multi-selection-count')).toHaveText('1 selected');
+  await page.getByTestId('move-target').selectOption(fixture.finalItem.correctDestinationId);
+  await page.getByTestId('move-selected-items').click();
+
+  const ending = page.getByTestId('completion-sequence');
+  const heading = ending.getByRole('heading', { name: 'The laboratory is restored' });
+  await expect(ending).toBeVisible();
+  await expect(heading).toBeFocused();
+
+  await page.keyboard.press('Escape');
+  await expect(ending).toBeVisible();
+  await expect(heading).toBeFocused();
+
+  const continueExploring = ending.getByRole('button', { name: 'Continue exploring' });
+  await continueExploring.focus();
+  await page.keyboard.press('Enter');
+  await expect(ending).toHaveCount(0);
+  await expect(selectionToggle).toBeFocused();
+});
+
 test('the completion dialog recovers Tab focus when focus moves outside it', async ({ page }) => {
   const fixture = createAlmostCompleteFixture();
   await page.addInitScript(({ key, value }) => window.localStorage.setItem(key, value), {
@@ -346,18 +493,37 @@ test('the completion dialog recovers Tab focus when focus moves outside it', asy
 });
 
 for (const { viewport, percent, textScale } of [
+  { viewport: { width: 320, height: 360 }, percent: 200, textScale: 2 },
   { viewport: { width: 320, height: 480 }, percent: 125, textScale: 1.25 },
   { viewport: { width: 320, height: 480 }, percent: 150, textScale: 1.5 },
   { viewport: { width: 390, height: 480 }, percent: 125, textScale: 1.25 },
   { viewport: { width: 390, height: 480 }, percent: 150, textScale: 1.5 },
   { viewport: { width: 320, height: 400 }, percent: 150, textScale: 1.5 },
   { viewport: { width: 390, height: 400 }, percent: 150, textScale: 1.5 },
+  { viewport: { width: 1280, height: 600 }, percent: 150, textScale: 1.5 },
 ]) {
   test(`the restoration ending stays readable and keyboard reachable at ${viewport.width}x${viewport.height} with ${percent}% text`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     const ending = await openEndingFromAlmostCompleteFixture(page, { textScale });
     const dialog = ending.getByRole('dialog');
+    const dialogBounds = await dialog.evaluate((node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        left: rect.left,
+        right: rect.right,
+        windowWidth: window.innerWidth,
+        windowHeight: window.innerHeight,
+        documentWidth: document.documentElement.scrollWidth,
+      };
+    });
+    expect(dialogBounds.top, 'the ending dialog should stay inside the viewport').toBeGreaterThanOrEqual(-1);
+    expect(dialogBounds.bottom, 'the ending dialog should stay inside the viewport').toBeLessThanOrEqual(dialogBounds.windowHeight + 1);
+    expect(dialogBounds.left, 'the ending dialog should stay inside the viewport').toBeGreaterThanOrEqual(-1);
+    expect(dialogBounds.right, 'the ending dialog should stay inside the viewport').toBeLessThanOrEqual(dialogBounds.windowWidth + 1);
+    expect(dialogBounds.documentWidth, 'the page should not overflow horizontally').toBeLessThanOrEqual(dialogBounds.windowWidth + 1);
     const appliedTextScale = await page.locator('html').evaluate((root) => (
       getComputedStyle(root).getPropertyValue('--text-scale').trim()
     ));
@@ -376,12 +542,12 @@ for (const { viewport, percent, textScale } of [
 
     for (const content of [narrative, status]) {
       await expect(content).toBeVisible();
-      await expectFullyReachableWithinEndingScrollArea(content);
+      await expectReachableWithinEndingScrollArea(content);
     }
     for (let index = 0; index < 6; index += 1) {
       const stat = stats.nth(index);
       await expect(stat).toBeVisible();
-      await expectFullyReachableWithinEndingScrollArea(stat);
+      await expectReachableWithinEndingScrollArea(stat);
     }
 
     expect(await dialog.evaluate((node) => node.scrollTop), 'the dialog should scroll to reach its ending content')

@@ -13,8 +13,7 @@ const backupKey = 'palimpsest-laboratory.backup.v1';
 const seed = 'palimpsest-first-shift';
 const testViewport = { width: 1280, height: 720 };
 
-function cameraCenteredOnInvention() {
-  const scale = 0.5;
+function cameraCenteredOnInvention(scale = 0.5) {
   const centerX = WORLD_BOUNDS.x + WORLD_BOUNDS.width / 2;
   const centerY = WORLD_BOUNDS.y + WORLD_BOUNDS.height / 2;
   return {
@@ -34,6 +33,13 @@ function cameraWithEnginePartiallyBeyondRightEdge() {
     panY: (testViewport.height - 68) / 2 - centerY * scale,
     scale,
   };
+}
+
+function boxesOverlap(first, second) {
+  return first.x < second.x + second.width
+    && first.x + first.width > second.x
+    && first.y < second.y + second.height
+    && first.y + first.height > second.y;
 }
 
 function createV2MigrationFixture({ camera = { panX: -450, panY: -160, scale: 0.62 } } = {}) {
@@ -82,6 +88,48 @@ async function fileCollection(page, collection) {
   }
 }
 
+function createSevenOfEightCollectionState(collection) {
+  const state = createNewGameState();
+  const destination = DESTINATIONS.find((entry) => entry.id === collection.destinationId);
+  for (const [slotIndex, itemId] of collection.itemIds.slice(0, -1).entries()) {
+    const item = state.items.find((entry) => entry.id === itemId);
+    if (!item || !destination) throw new Error(`Could not seed collection ${collection.id}`);
+    item.position = getTargetSlotPosition({
+      target: { kind: 'destination', id: destination.id },
+      item,
+      slotIndex,
+      destinations: DESTINATIONS,
+      scratchPads: SCRATCH_PADS,
+    });
+    item.placement = { kind: 'destination', destinationId: destination.id, slotIndex };
+    item.rotation = 0;
+    item.validation = 'correct';
+  }
+  return state;
+}
+
+async function openAlmostCompleteCollectionAndFileLastItem(page, collection, state) {
+  await page.addInitScript(({ key, raw }) => window.localStorage.setItem(key, raw), {
+    key: autoSaveKey,
+    raw: encodeSave(state),
+  });
+  await page.goto('/');
+  await expect(page.getByTestId('autosave-status')).toHaveText('Saved just now');
+  await page.getByTestId('world-jump').selectOption(`collection:${collection.id}`);
+
+  const finalItem = page.getByTestId(`lab-item-${collection.itemIds.at(-1)}`);
+  await expect(finalItem).toBeVisible();
+  await finalItem.focus();
+  await finalItem.press('Enter');
+  await expect(page.getByTestId('item-inspector')).toBeVisible();
+
+  await page.getByTestId('move-target').selectOption(collection.destinationId);
+  const moveButton = page.getByTestId('move-item');
+  await moveButton.focus();
+  await moveButton.press('Enter');
+  return moveButton;
+}
+
 test('a fresh laboratory presents the Palimpsest Engine as a dormant, accessible instrument', async ({ page }) => {
   await page.setViewportSize(testViewport);
   const freshState = createNewGameState();
@@ -99,6 +147,112 @@ test('a fresh laboratory presents the Palimpsest Engine as a dormant, accessible
   await expect(engine.locator('.engine-stage')).toHaveText('Dormant');
   await expect(engine.locator('.engine-crystal')).toHaveCount(0);
   await expect(engine.locator('.engine-wheel')).toHaveCount(0);
+});
+
+test('the Engine overview keeps its title and stage readable at 50% zoom', async ({ page }) => {
+  await page.setViewportSize(testViewport);
+  const chronologyState = createNewGameState();
+  chronologyState.camera = cameraCenteredOnInvention(0.5);
+  chronologyState.inventionStage = 'Chronology Wheel';
+  const normalizedState = normalizeGameState(chronologyState);
+  await page.addInitScript(({ key, raw }) => window.localStorage.setItem(key, raw), {
+    key: autoSaveKey,
+    raw: encodeSave(normalizedState),
+  });
+  await page.goto('/');
+
+  await expect(page.locator('.zoom-readout')).toHaveText('50%');
+  const engine = page.locator('.invention-core');
+  const title = engine.locator('.engine-label strong');
+  const synopsis = engine.locator('.engine-label span');
+  const stage = engine.locator('.engine-stage');
+  const artwork = engine.locator('.engine-rings');
+  await expect(engine).toHaveAttribute('aria-label', 'The Palimpsest Engine');
+  await expect(stage).toHaveText('Chronology Wheel');
+
+  const screenTextSizes = await page.evaluate(() => {
+    const inverseScale = Number.parseFloat(getComputedStyle(document.querySelector('.world-scene')).getPropertyValue('--inverse-camera-scale'));
+    const getScreenFontSize = (selector) => Number.parseFloat(getComputedStyle(document.querySelector(selector)).fontSize) / inverseScale;
+    return {
+      title: getScreenFontSize('.engine-label strong'),
+      stage: getScreenFontSize('.engine-stage'),
+    };
+  });
+  expect(screenTextSizes.title).toBeGreaterThanOrEqual(11);
+  expect(screenTextSizes.stage).toBeGreaterThanOrEqual(9);
+  await expect(engine).toHaveAccessibleDescription(/The chronology wheel can now reconcile the Engine/i);
+
+  const [engineBox, titleBox, stageBox, artworkBox, synopsisBox] = await Promise.all([
+    engine.boundingBox(),
+    title.boundingBox(),
+    stage.boundingBox(),
+    artwork.boundingBox(),
+    synopsis.boundingBox(),
+  ]);
+  expect(engineBox).not.toBeNull();
+  expect(titleBox).not.toBeNull();
+  expect(stageBox).not.toBeNull();
+  expect(artworkBox).not.toBeNull();
+  expect(synopsisBox).not.toBeNull();
+  expect(titleBox.x).toBeGreaterThanOrEqual(engineBox.x);
+  expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(engineBox.x + engineBox.width);
+  expect(titleBox.y).toBeGreaterThanOrEqual(engineBox.y);
+  expect(stageBox.x).toBeGreaterThanOrEqual(engineBox.x);
+  expect(stageBox.x + stageBox.width).toBeLessThanOrEqual(engineBox.x + engineBox.width);
+  expect(stageBox.y + stageBox.height).toBeLessThanOrEqual(engineBox.y + engineBox.height);
+  expect(boxesOverlap(titleBox, artworkBox)).toBe(false);
+  expect(boxesOverlap(stageBox, artworkBox)).toBe(false);
+  expect(boxesOverlap(titleBox, stageBox)).toBe(false);
+  expect(synopsisBox.width).toBeLessThanOrEqual(1);
+  expect(synopsisBox.height).toBeLessThanOrEqual(1);
+});
+
+test('the Engine restores its complete descriptive layout at 100% zoom', async ({ page }) => {
+  await page.setViewportSize(testViewport);
+  const chronologyState = createNewGameState();
+  chronologyState.camera = cameraCenteredOnInvention(1);
+  chronologyState.inventionStage = 'Chronology Wheel';
+  const normalizedState = normalizeGameState(chronologyState);
+  await page.addInitScript(({ key, raw }) => window.localStorage.setItem(key, raw), {
+    key: autoSaveKey,
+    raw: encodeSave(normalizedState),
+  });
+  await page.goto('/');
+
+  await expect(page.locator('.zoom-readout')).toHaveText('100%');
+  const engine = page.locator('.invention-core');
+  const title = engine.locator('.engine-label strong');
+  const synopsis = engine.locator('.engine-label span');
+  const stage = engine.locator('.engine-stage');
+  const artwork = engine.locator('.engine-rings');
+  await expect(engine).toHaveAccessibleDescription(/The chronology wheel can now reconcile the Engine/i);
+  await expect(synopsis).toBeVisible();
+  await expect(stage).toHaveText('Chronology Wheel');
+
+  const screenTextSizes = await page.evaluate(() => ({
+    title: Number.parseFloat(getComputedStyle(document.querySelector('.engine-label strong')).fontSize),
+    stage: Number.parseFloat(getComputedStyle(document.querySelector('.engine-stage')).fontSize),
+  }));
+  expect(screenTextSizes.title).toBeGreaterThanOrEqual(15);
+  expect(screenTextSizes.stage).toBeGreaterThanOrEqual(10);
+
+  const [engineBox, titleBox, stageBox, artworkBox] = await Promise.all([
+    engine.boundingBox(),
+    title.boundingBox(),
+    stage.boundingBox(),
+    artwork.boundingBox(),
+  ]);
+  expect(engineBox).not.toBeNull();
+  expect(titleBox).not.toBeNull();
+  expect(stageBox).not.toBeNull();
+  expect(artworkBox).not.toBeNull();
+  expect(titleBox.x).toBeGreaterThanOrEqual(engineBox.x);
+  expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(engineBox.x + engineBox.width);
+  expect(stageBox.x).toBeGreaterThanOrEqual(engineBox.x);
+  expect(stageBox.x + stageBox.width).toBeLessThanOrEqual(engineBox.x + engineBox.width);
+  expect(boxesOverlap(titleBox, artworkBox)).toBe(false);
+  expect(boxesOverlap(stageBox, artworkBox)).toBe(false);
+  expect(boxesOverlap(titleBox, stageBox)).toBe(false);
 });
 
 test('the Palimpsest Engine remains mounted when only its left side overlaps the viewport', async ({ page }) => {
@@ -223,6 +377,41 @@ test('the Chronology Wheel stage presents its crystal assembly with reduced moti
     const value = Number.parseFloat(duration);
     return duration.endsWith('ms') ? value : value * 1000;
   })).toBeLessThanOrEqual(0.01);
+});
+
+test('compact keyboard completion returns focus after opening the notebook', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 480 });
+  const collection = COLLECTIONS.find((entry) => entry.id === 'bell-before-dawn');
+  const state = createSevenOfEightCollectionState(collection);
+  const finalItemId = collection.itemIds.at(-1);
+
+  await openAlmostCompleteCollectionAndFileLastItem(page, collection, state);
+
+  await expect(page.getByTestId('notebook-panel')).toBeVisible();
+  await expect(page.getByTestId('item-inspector')).toHaveCount(0);
+  await expect(page.getByTestId(`collection-${collection.id}`)).toContainText('8 / 8 filed');
+  await expect(page.getByTestId('autosave-status')).toHaveText('Saved just now');
+
+  const savedState = decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey));
+  expect(savedState.progress.completedCollectionIds).toContain(collection.id);
+  expect(savedState.progress.unlockedPuzzleIds).not.toContain('chronology-last-bell');
+  expect(savedState.items.find((item) => item.id === finalItemId)).toMatchObject({
+    validation: 'correct',
+    placement: { kind: 'destination', destinationId: collection.destinationId },
+  });
+  await expect(page.getByTestId('multi-selection-toggle')).toBeFocused();
+});
+
+test('desktop keyboard collection completion keeps the Inspector focused', async ({ page }) => {
+  await page.setViewportSize(testViewport);
+  const collection = COLLECTIONS.find((entry) => entry.id === 'bell-before-dawn');
+  const state = createSevenOfEightCollectionState(collection);
+
+  const moveButton = await openAlmostCompleteCollectionAndFileLastItem(page, collection, state);
+
+  await expect(page.getByTestId('notebook-panel')).toBeVisible();
+  await expect(page.getByTestId('item-inspector')).toBeVisible();
+  await expect(moveButton).toBeFocused();
 });
 
 test('v2 migration preserves the old placement and the chapter gate, compass, and chronology can be completed', async ({ page }) => {
@@ -421,7 +610,9 @@ test('v2 migration preserves the old placement and the chapter gate, compass, an
   expect(reloadedWithdrawal.inventionStage).toBe('Chronology Wheel');
   await expectCurrentChapterStatus();
   await page.getByTestId('open-puzzle').click();
-  await expect(page.getByTestId('chronology-puzzle-panel')).toBeVisible();
+  const chronologyPuzzlePanel = page.getByTestId('chronology-puzzle-panel');
+  await expect(chronologyPuzzlePanel).toBeVisible();
+  await expect(chronologyPuzzlePanel.getByRole('heading', { level: 2 })).toBeFocused();
   expect(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey)).not.toBe(autosaveBeforeWithdrawal);
 });
 

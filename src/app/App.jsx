@@ -3,12 +3,12 @@ import { CHAPTER_COLLECTION_IDS, COLLECTIONS, DESTINATIONS, getScratchPadsForOwn
 import { emitGameAudioEvent } from '../game/audio/audioEvents.js';
 import { createWebAudioAdapter } from '../game/audio/webAudioAdapter.js';
 import { getCompletionStats, isCollectionComplete, isCorrectlyFiled, isGameComplete } from '../game/domain/completion.js';
-import { completeCollection, findMissingCollectionMember } from '../game/domain/progression.js';
+import { findMissingCollectionMember } from '../game/domain/progression.js';
+import { planPuzzleCompletion } from '../game/domain/puzzleCompletion.js';
 import { getResonanceLensMatches } from '../game/domain/skillHighlights.js';
-import { validateDrop } from '../game/domain/placement.js';
-import { DEFAULT_GAME_ITEM_IDS, getCanonicalItemRotation } from '../game/persistence/gameState.js';
+import { planBatchPlacement, planSinglePlacement } from '../game/domain/placementTransaction.js';
+import { DEFAULT_GAME_ITEM_IDS } from '../game/persistence/gameState.js';
 import { loadPreferences, normalizePreferences, savePreferences } from '../game/preferences/preferences.js';
-import { allocateBatchTargetPlacements, allocateTargetPlacement } from '../game/world/placementLayout.js';
 import { CompletionSequence } from '../ui/CompletionSequence.jsx';
 import { EMPTY_HIGHLIGHTED_ITEM_IDS } from '../ui/highlightedItemIds.js';
 import { ItemInspector } from '../ui/ItemInspector.jsx';
@@ -28,6 +28,10 @@ const AETHER_WAYFINDER = SKILLS.find((skill) => skill.id === AETHER_WAYFINDER_ID
 const CHAPTER_COLLECTIONS = COLLECTIONS.filter((collection) => CHAPTER_COLLECTION_IDS.includes(collection.id));
 const MAX_BATCH_SELECTION = 40;
 const COMPACT_PANEL_QUERY = '(max-width: 720px)';
+const SHORT_TABLET_VIEW_QUERY = '(min-width: 721px) and (max-width: 1050px) and (min-height: 550px) and (max-height: 719px)';
+const MEDIUM_SHORT_DESKTOP_VIEW_QUERY = '(min-width: 1051px) and (max-width: 1340px) and (min-height: 550px) and (max-height: 719px)';
+const WIDE_SHORT_DESKTOP_VIEW_QUERY = '(min-width: 1341px) and (min-height: 550px) and (max-height: 719px)';
+const SHORT_HEIGHT_LARGE_TEXT_SCALES = new Set([1.5, 1.75, 2]);
 
 function isCompactViewport() {
   return typeof window !== 'undefined'
@@ -35,26 +39,27 @@ function isCompactViewport() {
     && window.matchMedia(COMPACT_PANEL_QUERY).matches;
 }
 
-function keepPositionInsideWorld(position, item) {
-  const width = item.width ?? 0;
-  const height = item.height ?? 0;
-  return {
-    x: Math.max(WORLD_BOUNDS.x, Math.min(WORLD_BOUNDS.x + WORLD_BOUNDS.width - width, position.x)),
-    y: Math.max(WORLD_BOUNDS.y, Math.min(WORLD_BOUNDS.y + WORLD_BOUNDS.height - height, position.y)),
-  };
+function isShortTabletViewport() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia(SHORT_TABLET_VIEW_QUERY).matches;
+}
+
+function isMediumShortDesktopViewport() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia(MEDIUM_SHORT_DESKTOP_VIEW_QUERY).matches;
+}
+
+function isWideShortDesktopViewport() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia(WIDE_SHORT_DESKTOP_VIEW_QUERY).matches;
 }
 
 function objectProgressPercent(items) {
   if (!items.length) return 0;
   return Math.round((items.filter((item) => item.validation === 'correct').length / items.length) * 100);
-}
-
-function nextInventionStage(currentStage, rewardedStage) {
-  const candidate = rewardedStage === 'memory-crystal' ? 'Memory Crystal' : rewardedStage;
-  const stageOrder = { Dormant: 0, 'Memory Crystal': 1, 'Chronology Wheel': 2 };
-  const currentRank = stageOrder[currentStage] ?? -1;
-  const candidateRank = stageOrder[candidate] ?? -1;
-  return candidateRank > currentRank ? candidate : currentStage;
 }
 
 export default function App() {
@@ -82,6 +87,9 @@ export default function App() {
   const [activeLeftPanel, setActiveLeftPanel] = useState(null);
   const [activeRightPanel, setActiveRightPanel] = useState(null);
   const [isCompact, setIsCompact] = useState(isCompactViewport);
+  const [isShortTablet, setIsShortTablet] = useState(isShortTabletViewport);
+  const [isMediumShortDesktop, setIsMediumShortDesktop] = useState(isMediumShortDesktopViewport);
+  const [isWideShortDesktop, setIsWideShortDesktop] = useState(isWideShortDesktopViewport);
   const [saveOpen, setSaveOpen] = useState(false);
   const [toast, setToast] = useState('');
   const [lensActive, setLensActive] = useState(false);
@@ -103,9 +111,17 @@ export default function App() {
   }));
   const worldRef = useRef(null);
   const [worldOverlayHost, setWorldOverlayHost] = useState(null);
+  const notebookToggleRef = useRef(null);
   const openPuzzleButtonRef = useRef(null);
   const documentPreferencesRef = useRef(null);
   const audioAdapterRef = useRef(null);
+  const isLargeTextShortHeight = SHORT_HEIGHT_LARGE_TEXT_SCALES.has(preferences.textScale);
+  const shortTabletLargeTextGuidance = isShortTablet && isLargeTextShortHeight;
+  const mediumShortDesktopLargeTextGuidance = isMediumShortDesktop && isLargeTextShortHeight;
+  const wideShortDesktopLargeTextGuidance = isWideShortDesktop && isLargeTextShortHeight;
+  const shortHeightLargeTextGuidance = shortTabletLargeTextGuidance
+    || mediumShortDesktopLargeTextGuidance
+    || wideShortDesktopLargeTextGuidance;
   const selectedItem = game.items.find((item) => item.id === selectedItemId) ?? null;
   const progress = game.progress;
   const scratchPads = useMemo(() => getScratchPadsForOwnedSkills(progress.ownedSkills), [progress.ownedSkills]);
@@ -153,6 +169,9 @@ export default function App() {
     notebook: game.notebook,
     expectedItemIds: DEFAULT_GAME_ITEM_IDS,
   }), [game.items, progress, game.notebook]);
+  const handleCompletionFocusReturn = useCallback(() => {
+    worldRef.current?.focusSelectionToggle();
+  }, []);
 
   useLayoutEffect(() => {
     const root = document.documentElement;
@@ -200,14 +219,35 @@ export default function App() {
   }, [gameComplete]);
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia(COMPACT_PANEL_QUERY);
+    const compactMediaQuery = window.matchMedia(COMPACT_PANEL_QUERY);
+    const shortTabletMediaQuery = window.matchMedia(SHORT_TABLET_VIEW_QUERY);
+    const mediumShortDesktopMediaQuery = window.matchMedia(MEDIUM_SHORT_DESKTOP_VIEW_QUERY);
+    const wideShortDesktopMediaQuery = window.matchMedia(WIDE_SHORT_DESKTOP_VIEW_QUERY);
     const updateCompactMode = (event) => setIsCompact(event.matches);
-    setIsCompact(mediaQuery.matches);
-    if (mediaQuery.addEventListener) mediaQuery.addEventListener('change', updateCompactMode);
-    else mediaQuery.addListener(updateCompactMode);
+    const updateShortTabletMode = (event) => setIsShortTablet(event.matches);
+    const updateMediumShortDesktopMode = (event) => setIsMediumShortDesktop(event.matches);
+    const updateWideShortDesktopMode = (event) => setIsWideShortDesktop(event.matches);
+    setIsCompact(compactMediaQuery.matches);
+    setIsShortTablet(shortTabletMediaQuery.matches);
+    setIsMediumShortDesktop(mediumShortDesktopMediaQuery.matches);
+    setIsWideShortDesktop(wideShortDesktopMediaQuery.matches);
+    if (compactMediaQuery.addEventListener) compactMediaQuery.addEventListener('change', updateCompactMode);
+    else compactMediaQuery.addListener(updateCompactMode);
+    if (shortTabletMediaQuery.addEventListener) shortTabletMediaQuery.addEventListener('change', updateShortTabletMode);
+    else shortTabletMediaQuery.addListener(updateShortTabletMode);
+    if (mediumShortDesktopMediaQuery.addEventListener) mediumShortDesktopMediaQuery.addEventListener('change', updateMediumShortDesktopMode);
+    else mediumShortDesktopMediaQuery.addListener(updateMediumShortDesktopMode);
+    if (wideShortDesktopMediaQuery.addEventListener) wideShortDesktopMediaQuery.addEventListener('change', updateWideShortDesktopMode);
+    else wideShortDesktopMediaQuery.addListener(updateWideShortDesktopMode);
     return () => {
-      if (mediaQuery.removeEventListener) mediaQuery.removeEventListener('change', updateCompactMode);
-      else mediaQuery.removeListener(updateCompactMode);
+      if (compactMediaQuery.removeEventListener) compactMediaQuery.removeEventListener('change', updateCompactMode);
+      else compactMediaQuery.removeListener(updateCompactMode);
+      if (shortTabletMediaQuery.removeEventListener) shortTabletMediaQuery.removeEventListener('change', updateShortTabletMode);
+      else shortTabletMediaQuery.removeListener(updateShortTabletMode);
+      if (mediumShortDesktopMediaQuery.removeEventListener) mediumShortDesktopMediaQuery.removeEventListener('change', updateMediumShortDesktopMode);
+      else mediumShortDesktopMediaQuery.removeListener(updateMediumShortDesktopMode);
+      if (wideShortDesktopMediaQuery.removeEventListener) wideShortDesktopMediaQuery.removeEventListener('change', updateWideShortDesktopMode);
+      else wideShortDesktopMediaQuery.removeListener(updateWideShortDesktopMode);
     };
   }, []);
 
@@ -283,73 +323,32 @@ export default function App() {
     updateGame((current) => ({ ...current, camera }));
   };
 
-  const handleDrop = (itemId, target, position) => {
-    const item = game.items.find((entry) => entry.id === itemId);
-    if (!item) return null;
-    const desiredPosition = position ? keepPositionInsideWorld(position, item) : undefined;
-    const allocation = allocateTargetPlacement({
-      target,
-      item,
-      items: game.items,
-      destinations: DESTINATIONS,
-      scratchPads,
-      preferredPosition: desiredPosition
-        ? target.kind === 'workspace'
-          ? desiredPosition
-          : { x: desiredPosition.x + (item.width ?? 0) / 2, y: desiredPosition.y + (item.height ?? 0) / 2 }
-        : undefined,
-    });
-    if (!allocation.ok) {
-      setToast(allocation.reason);
+  const handleDrop = (itemId, target, position, { focusSelectionToggleAfterCompletion = false } = {}) => {
+    if (!game.items.some((entry) => entry.id === itemId)) return null;
+    const result = planSinglePlacement({ game, itemId, target, position });
+    if (!result.ok) {
+      setToast(result.reason);
       return null;
     }
 
-    const nextPosition = keepPositionInsideWorld(allocation.position, item);
-    const allocatedTarget = { ...target, ...(Number.isInteger(allocation.slotIndex) ? { slotIndex: allocation.slotIndex } : {}) };
-    const validation = validateDrop(item, allocatedTarget);
-    const movedItem = {
-      ...item,
-      position: nextPosition,
-      placement: allocation.placement,
-      rotation: allocation.placement.kind === 'workspace' ? getCanonicalItemRotation(item.id, game.contentSeed) : 0,
-      validation: validation.status,
-      previousWorkspacePosition: target.kind === 'workspace'
-        ? nextPosition
-        : target.kind === 'destination' && item.placement?.kind === 'workspace'
-          ? item.position
-          : item.previousWorkspacePosition ?? item.position,
-    };
-    const items = game.items.map((entry) => entry.id === itemId ? movedItem : entry);
-    let nextProgress = game.progress;
-    let newlyCompleted = null;
-    const newlyCompletedCollections = [];
-    const previouslyUnlockedPuzzleIds = new Set(nextProgress.unlockedPuzzleIds ?? []);
-    for (const collection of COLLECTIONS) {
-      if (isCollectionComplete(collection, items) && !(nextProgress.completedCollectionIds ?? []).includes(collection.id)) {
-        nextProgress = completeCollection(nextProgress, collection);
-        newlyCompleted = collection;
-        newlyCompletedCollections.push(collection);
-      }
-    }
-    const newlyUnlockedPuzzle = PUZZLES.find((puzzle) => (nextProgress.unlockedPuzzleIds ?? []).includes(puzzle.id)
-      && !previouslyUnlockedPuzzleIds.has(puzzle.id));
-    const notebookDiscoveries = [...(game.notebook?.discoveries ?? [])];
-    if (newlyCompleted?.discoveryId && !notebookDiscoveries.includes(newlyCompleted.discoveryId)) {
-      notebookDiscoveries.push(newlyCompleted.discoveryId);
-    }
+    const { items, progress, discoveries } = result.changes;
+    const movedItem = result.movedItems[0];
+    const newlyCompletedCollections = result.newlyCompletedCollections;
+    const newlyCompleted = newlyCompletedCollections.at(-1) ?? null;
+    const newlyUnlockedPuzzle = result.newlyUnlockedPuzzles[0] ?? null;
     updateGame((current) => ({
       ...current,
       items,
-      progress: nextProgress,
-      notebook: { ...(current.notebook ?? {}), discoveries: notebookDiscoveries },
+      progress,
+      notebook: { ...(current.notebook ?? {}), discoveries },
     }));
-    if (validation.status === 'correct') {
+    if (movedItem.validation === 'correct') {
       emitGameAudioEvent('item.placement.correct', {
         itemId,
         targetKind: target.kind,
         ...(target.id ? { targetId: target.id } : {}),
       });
-    } else if (validation.status === 'invalid') {
+    } else if (movedItem.validation === 'invalid') {
       emitGameAudioEvent('item.placement.invalid', {
         itemId,
         targetKind: target.kind,
@@ -366,9 +365,9 @@ export default function App() {
     setActiveRightPanel(newlyUnlockedPuzzle ? 'puzzle' : 'inspector');
     if (isCompact && !newlyCompleted) setActiveLeftPanel(null);
 
-    if (validation.status === 'correct') {
+    if (movedItem.validation === 'correct') {
       setToast('Filed correctly. The brass index clicks into place.');
-    } else if (validation.status === 'invalid') {
+    } else if (movedItem.validation === 'invalid') {
       setToast('Misfiled. The object remains where you left it; move it again when you are ready.');
     } else if (target.kind === 'scratchpad') {
       setToast('Placed on the work surface. This is a temporary arrangement, not a final filing.');
@@ -392,11 +391,14 @@ export default function App() {
         }
       }
     }
+    if (focusSelectionToggleAfterCompletion && isCompact && newlyCompleted && !newlyUnlockedPuzzle) {
+      window.requestAnimationFrame(() => worldRef.current?.focusSelectionToggle());
+    }
     return movedItem;
   };
 
   const handleInspectorMove = (item, target) => {
-    const movedItem = handleDrop(item.id, target);
+    const movedItem = handleDrop(item.id, target, undefined, { focusSelectionToggleAfterCompletion: true });
     if (!movedItem) return false;
 
     if (target.kind === 'destination') {
@@ -416,69 +418,21 @@ export default function App() {
 
   const handleBatchInspectorMove = (batchItems, target) => {
     const itemIds = batchItems.map((item) => item.id);
-    const allocationResult = allocateBatchTargetPlacements({
-      target,
-      itemIds,
-      items: game.items,
-      destinations: DESTINATIONS,
-      scratchPads,
-    });
-    if (!allocationResult.ok) {
-      setToast(allocationResult.reason);
+    const result = planBatchPlacement({ game, itemIds, target });
+    if (!result.ok) {
+      setToast(result.reason);
       return false;
     }
 
-    const allocationById = new Map(allocationResult.allocations.map((allocation) => [allocation.itemId, allocation]));
-    const movedItems = [];
-    const items = game.items.map((item) => {
-      const allocation = allocationById.get(item.id);
-      if (!allocation) return item;
-
-      const nextPosition = keepPositionInsideWorld(allocation.position, item);
-      const allocatedTarget = {
-        ...target,
-        ...(Number.isInteger(allocation.slotIndex) ? { slotIndex: allocation.slotIndex } : {}),
-      };
-      const validation = validateDrop(item, allocatedTarget);
-      const movedItem = {
-        ...item,
-        position: nextPosition,
-        placement: allocation.placement,
-        rotation: allocation.placement.kind === 'workspace' ? getCanonicalItemRotation(item.id, game.contentSeed) : 0,
-        validation: validation.status,
-        previousWorkspacePosition: target.kind === 'workspace'
-          ? nextPosition
-          : target.kind === 'destination' && item.placement?.kind === 'workspace'
-            ? item.position
-            : item.previousWorkspacePosition ?? item.position,
-      };
-      movedItems.push(movedItem);
-      return movedItem;
-    });
-
-    let nextProgress = game.progress;
-    const newlyCompletedCollections = [];
-    const previouslyUnlockedPuzzleIds = new Set(nextProgress.unlockedPuzzleIds ?? []);
-    for (const collection of COLLECTIONS) {
-      if (isCollectionComplete(collection, items) && !(nextProgress.completedCollectionIds ?? []).includes(collection.id)) {
-        nextProgress = completeCollection(nextProgress, collection);
-        newlyCompletedCollections.push(collection);
-      }
-    }
-    const newlyUnlockedPuzzles = PUZZLES.filter((puzzle) => (nextProgress.unlockedPuzzleIds ?? []).includes(puzzle.id)
-      && !previouslyUnlockedPuzzleIds.has(puzzle.id));
-    const notebookDiscoveries = [...(game.notebook?.discoveries ?? [])];
-    for (const collection of newlyCompletedCollections) {
-      if (collection.discoveryId && !notebookDiscoveries.includes(collection.discoveryId)) {
-        notebookDiscoveries.push(collection.discoveryId);
-      }
-    }
+    const { items, progress, discoveries } = result.changes;
+    const { movedItems, validationCounts, newlyCompletedCollections, newlyUnlockedPuzzles } = result;
+    const newlyUnlockedPuzzle = newlyUnlockedPuzzles[0] ?? null;
 
     updateGame((current) => ({
       ...current,
       items,
-      progress: nextProgress,
-      notebook: { ...(current.notebook ?? {}), discoveries: notebookDiscoveries },
+      progress,
+      notebook: { ...(current.notebook ?? {}), discoveries },
     }));
 
     for (const item of movedItems) {
@@ -507,14 +461,12 @@ export default function App() {
     setMultiSelectionMode(false);
     setSelectedItemId(null);
     setKeyboardFocusItemId(null);
-    const newlyUnlockedPuzzle = newlyUnlockedPuzzles[0] ?? null;
     setActiveRightPanel(newlyUnlockedPuzzle ? 'puzzle' : null);
     if (!newlyUnlockedPuzzle) {
       window.requestAnimationFrame(() => worldRef.current?.focusSelectionToggle());
     }
 
-    const correctCount = movedItems.filter((item) => item.validation === 'correct').length;
-    const invalidCount = movedItems.filter((item) => item.validation === 'invalid').length;
+    const { correct: correctCount, invalid: invalidCount } = validationCounts;
     if (target.kind === 'scratchpad') {
       setToast(`${movedItems.length} objects placed on the work surface. This is a temporary arrangement.`);
     } else if (target.kind === 'workspace') {
@@ -682,38 +634,23 @@ export default function App() {
   };
 
   const handleSolvePuzzle = (puzzleId) => {
-    if ((progress.solvedPuzzleIds ?? []).includes(puzzleId)) return;
-    const puzzle = PUZZLES.find((entry) => entry.id === puzzleId);
-    if (!puzzle) return;
-    const requirements = puzzle.requiresCompletedCollectionIds ?? [];
-    const prerequisitesMet = requirements.every((collectionId) => (
-      (progress.completedCollectionIds ?? []).includes(collectionId)
-    ));
-    if (!prerequisitesMet || !(progress.unlockedPuzzleIds ?? []).includes(puzzleId)) return;
-    const rewardStage = puzzle.reward?.inventionStage;
+    const completion = planPuzzleCompletion({ game, puzzleId });
+    if (!completion.ok) return;
     updateGame((current) => {
-      const discoveries = [...(current.notebook?.discoveries ?? [])];
-      const clueId = puzzle.reward?.clueId;
-      if (clueId && !discoveries.includes(clueId)) discoveries.push(clueId);
-      return {
-        ...current,
-        progress: { ...current.progress, solvedPuzzleIds: [...(current.progress.solvedPuzzleIds ?? []), puzzleId] },
-        inventionStage: nextInventionStage(current.inventionStage, rewardStage),
-        notebook: { ...(current.notebook ?? {}), discoveries },
-      };
+      const latest = planPuzzleCompletion({ game: current, puzzleId });
+      return latest.ok ? latest.nextGame : current;
     });
-    const nextStage = nextInventionStage(game.inventionStage, rewardStage);
     emitGameAudioEvent('puzzle.completed', { puzzleId });
-    if (nextStage !== game.inventionStage) {
+    if (completion.toStage !== completion.fromStage) {
       emitGameAudioEvent('machinery.stage.changed', {
-        fromStage: game.inventionStage,
-        toStage: nextStage,
+        fromStage: completion.fromStage,
+        toStage: completion.toStage,
       });
-      if (game.inventionStage !== 'Chronology Wheel' && nextStage === 'Chronology Wheel') {
+      if (completion.fromStage !== 'Chronology Wheel' && completion.toStage === 'Chronology Wheel') {
         emitGameAudioEvent('invention.assembled', { inventionId: 'palimpsest-engine' });
       }
     }
-    setToast(puzzle.id === 'pulse-sequence'
+    setToast(puzzleId === 'pulse-sequence'
       ? 'The pulse sequence resolves. A Memory Crystal has formed in the Palimpsest Engine.'
       : 'The dates align. A Chronology Wheel joins the Palimpsest Engine.');
   };
@@ -792,7 +729,8 @@ export default function App() {
   const focusCollection = (collection) => {
     const destination = DESTINATIONS.find((entry) => entry.id === collection.destinationId);
     setActiveLeftPanel(null);
-    if (destination) worldRef.current?.focusDestination(destination);
+    if (destination) worldRef.current?.focusDestination(destination, undefined, { announce: true });
+    window.requestAnimationFrame(() => notebookToggleRef.current?.focus());
   };
 
   const openPuzzle = () => {
@@ -816,6 +754,9 @@ export default function App() {
     <div
       className="game-shell"
       data-testid="game-shell"
+      data-short-tablet-large-text={shortTabletLargeTextGuidance ? 'true' : undefined}
+      data-medium-short-large-text={mediumShortDesktopLargeTextGuidance ? 'true' : undefined}
+      data-wide-short-large-text={wideShortDesktopLargeTextGuidance ? 'true' : undefined}
       onPointerDownCapture={unlockAudioFromGesture}
       onKeyDownCapture={unlockAudioFromGesture}
     >
@@ -824,9 +765,27 @@ export default function App() {
           <p className="brand-kicker">A laboratory of lost things</p>
           <h1>The Palimpsest Engine</h1>
         </div>
-        <div className="header-progress" aria-label={`Laboratory ${restoredPercent}% restored`}>
-          <span className="progress-dial" aria-hidden="true">{restoredPercent}<small>%</small></span>
-          <span><strong>Restoration</strong><small data-testid="skill-points">{(progress.completedCollectionIds ?? []).length} collection rewards · Skill points: {progress.skillPoints}</small><small data-testid="chapter-progress">Research collections: {chapterCompletedCount} of {CHAPTER_COLLECTIONS.length}</small><small data-testid="invention-stage">Invention stage: {game.inventionStage}</small></span>
+        <div className="header-progress">
+          <span className="progress-dial" role="progressbar" aria-label="Laboratory restoration" aria-valuemin={0} aria-valuemax={100} aria-valuenow={restoredPercent}>{restoredPercent}<small>%</small></span>
+          <span className="header-progress__copy">
+            <strong>Restoration</strong>
+            {shortHeightLargeTextGuidance ? (
+              <details className="header-progress__details">
+                <summary>Progress details</summary>
+                <span className="header-progress__metrics">
+                  <small data-testid="skill-points">{(progress.completedCollectionIds ?? []).length} collection rewards · Skill points: {progress.skillPoints}</small>
+                  <small data-testid="chapter-progress">Research collections: {chapterCompletedCount} of {CHAPTER_COLLECTIONS.length}</small>
+                  <small data-testid="invention-stage">Invention stage: {game.inventionStage}</small>
+                </span>
+              </details>
+            ) : (
+              <span className="header-progress__metrics">
+                <small data-testid="skill-points">{(progress.completedCollectionIds ?? []).length} collection rewards · Skill points: {progress.skillPoints}</small>
+                <small data-testid="chapter-progress">Research collections: {chapterCompletedCount} of {CHAPTER_COLLECTIONS.length}</small>
+                <small data-testid="invention-stage">Invention stage: {game.inventionStage}</small>
+              </span>
+            )}
+          </span>
         </div>
         <nav className="header-actions" aria-label="Laboratory tools" onFocus={(event) => {
           const actions = event.currentTarget;
@@ -847,7 +806,7 @@ export default function App() {
             focusedControl.scrollIntoView({ block: 'nearest', inline: 'center' });
           }
         }}>
-          <button type="button" className="header-control" data-testid="toggle-notebook" aria-pressed={activeLeftPanel === 'notebook'} onClick={() => {
+          <button ref={notebookToggleRef} type="button" className="header-control" data-testid="toggle-notebook" aria-pressed={activeLeftPanel === 'notebook'} onClick={() => {
             const openingNotebook = activeLeftPanel !== 'notebook';
             setActiveLeftPanel(openingNotebook ? 'notebook' : null);
             if (openingNotebook && isCompact) setActiveRightPanel(null);
@@ -915,6 +874,7 @@ export default function App() {
           progress={progress}
           worldBounds={WORLD_BOUNDS}
           toastText={toast}
+          compactLargeTextGuidance={shortHeightLargeTextGuidance}
         />
         <div className="world-overlay-host" ref={setWorldOverlayHost} />
         {activeRightPanel === 'inspector' && (
@@ -959,6 +919,7 @@ export default function App() {
         <CompletionSequence
           stats={completionStats}
           userReducedMotion={preferences.reduceMotion}
+          onReturnFocusFallback={saveOpen ? null : handleCompletionFocusReturn}
           onContinue={() => {
             setCompletionOpen(false);
             setSaveOpen(false);

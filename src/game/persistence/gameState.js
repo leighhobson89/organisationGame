@@ -332,6 +332,7 @@ export function createStartingCamera() {
   const viewportWidth = typeof window === 'undefined' ? 1280 : window.innerWidth;
   const windowHeight = typeof window === 'undefined' ? 800 : window.innerHeight;
   const viewportHeight = windowHeight - 68;
+  const tabletBridgeViewport = viewportWidth >= 721 && viewportWidth <= 1050 && windowHeight >= 720;
   const focus = {
     x: viewportWidth <= 480 ? 944 : viewportWidth <= 720 ? 1106 : 1360,
     y: Math.min(650, viewportHeight + 130),
@@ -339,7 +340,7 @@ export function createStartingCamera() {
   const shortMobileViewport = viewportWidth <= 720 && windowHeight >= 360 && windowHeight <= 439;
   return {
     panX: viewportWidth / 2 + 70 - focus.x * scale,
-    panY: viewportHeight / 2 - focus.y * scale - (shortMobileViewport ? 20 : 0),
+    panY: viewportHeight / 2 - focus.y * scale - (shortMobileViewport ? 20 : 0) - (tabletBridgeViewport ? 50 : 0),
     scale,
   };
 }

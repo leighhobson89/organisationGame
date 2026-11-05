@@ -23,7 +23,7 @@ export function ScratchPad({ pad, itemCount, onFocus }) {
           <h3>{pad.label}</h3>
           <p>Temporary work surface · {itemCount} / {pad.capacity} spaces</p>
         </div>
-        <button type="button" className="hud-control" onClick={() => onFocus(pad)}>
+        <button type="button" className="hud-control" aria-label={`Focus ${pad.label}`} onClick={() => onFocus(pad)}>
           Focus
         </button>
       </header>

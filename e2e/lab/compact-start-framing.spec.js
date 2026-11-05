@@ -59,6 +59,17 @@ async function expectCenterHitTestable(locator, description, expectedRole) {
   expect(hitTest.hitTargetOrDescendant, `${description} should remain hit-testable at its center (${JSON.stringify(hitTest)})`).toBe(true);
 }
 
+async function expectNoOverlap(first, second, description) {
+  const [firstBox, secondBox] = await Promise.all([first.boundingBox(), second.boundingBox()]);
+  expect(firstBox, `${description}: first element should have geometry`).not.toBeNull();
+  expect(secondBox, `${description}: second element should have geometry`).not.toBeNull();
+  const overlaps = firstBox.x < secondBox.x + secondBox.width
+    && firstBox.x + firstBox.width > secondBox.x
+    && firstBox.y < secondBox.y + secondBox.height
+    && firstBox.y + firstBox.height > secondBox.y;
+  expect(overlaps, `${description} should not overlap (${JSON.stringify({ firstBox, secondBox })})`).toBe(false);
+}
+
 async function expectFirstClueAndFolioVisible(page) {
   await expectInsideWorldViewport(page, page.getByTestId(folioTestId));
   await expectInsideWorldViewport(page, page.getByTestId(firstCardTestId));
@@ -159,6 +170,27 @@ for (const viewport of [
     await expectObjectMostlyExposed(page, firstClue, 'the first calibration clue', 'fresh start');
     await expectCenterHitTestable(folio, 'the Harmonic Calibration Folio', 'region');
     await expectCenterHitTestable(firstClue, 'the first calibration clue', 'button');
+  });
+}
+
+for (const viewport of [
+  { width: 320, height: 360 },
+  { width: 360, height: 399 },
+]) {
+  test(`fresh-start hint overlays remain separate at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await openFreshGame(page, viewport);
+
+    const hint = page.locator('.world-hint');
+    const atlasToggle = page.getByTestId('world-atlas-toggle');
+    const autosaveStatus = page.getByTestId('autosave-status');
+    await expect(hint).toBeVisible();
+    await expect(atlasToggle).toBeVisible();
+    await expect(autosaveStatus).toHaveText('Saved just now');
+
+    await expectNoOverlap(hint, atlasToggle, 'fresh-start guidance and Atlas toggle');
+    await expectNoOverlap(hint, autosaveStatus, 'fresh-start guidance and autosave status');
+    await expectNoOverlap(atlasToggle, autosaveStatus, 'Atlas toggle and autosave status');
+    await expectCenterHitTestable(atlasToggle, 'the Clockwork Atlas toggle', 'button');
   });
 }
 

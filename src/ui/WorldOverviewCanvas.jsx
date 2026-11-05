@@ -171,10 +171,11 @@ function drawHighlightMarker(context, item) {
 
 const EMPTY_HIGHLIGHTED_ITEM_IDS = new Set();
 
-export function WorldOverviewCanvas({ items, width, height, visible, excludedItemIds, highlightedItemIds = EMPTY_HIGHLIGHTED_ITEM_IDS }) {
+export function WorldOverviewCanvas({ items, width, height, visible, cameraScale, devicePixelRatio, excludedItemIds, highlightedItemIds = EMPTY_HIGHLIGHTED_ITEM_IDS }) {
   const canvasRef = useRef(null);
-  const backingWidth = Math.max(1, Math.ceil(width * 0.5));
-  const backingHeight = Math.max(1, Math.ceil(height * 0.5));
+  const backingScale = Math.round(Math.min(1, Math.max(0.5, cameraScale * devicePixelRatio)) * 8) / 8;
+  const backingWidth = visible ? Math.max(1, Math.ceil(width * backingScale)) : 1;
+  const backingHeight = visible ? Math.max(1, Math.ceil(height * backingScale)) : 1;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -183,7 +184,7 @@ export function WorldOverviewCanvas({ items, width, height, visible, excludedIte
     context.clearRect(0, 0, canvas.width, canvas.height);
     if (!visible) return;
     context.save();
-    context.scale(0.5, 0.5);
+    context.scale(backingScale, backingScale);
     for (const item of items) {
       if (!excludedItemIds.has(item.id)) drawCard(context, item);
     }
@@ -191,7 +192,7 @@ export function WorldOverviewCanvas({ items, width, height, visible, excludedIte
       if (!excludedItemIds.has(item.id) && highlightedItemIds.has(item.id)) drawHighlightMarker(context, item);
     }
     context.restore();
-  }, [backingHeight, backingWidth, excludedItemIds, highlightedItemIds, items, visible]);
+  }, [backingHeight, backingScale, backingWidth, excludedItemIds, highlightedItemIds, items, visible]);
 
   return (
     <canvas

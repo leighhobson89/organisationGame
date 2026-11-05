@@ -124,6 +124,19 @@ function expectControlUsable(measurement, label) {
   expect(measurement.centerHit, `${label} center should be hit-testable`).toBe(true);
 }
 
+function expectControlUsableSoft(measurement, label) {
+  expect.soft(measurement.active, `${label} should have keyboard focus`).toBe(true);
+  expect.soft(measurement.left, `${label} left edge should stay in the Inspector`).toBeGreaterThanOrEqual(measurement.panel.left);
+  expect.soft(measurement.top, `${label} top edge should stay in the Inspector`).toBeGreaterThanOrEqual(measurement.panel.top);
+  expect.soft(measurement.right, `${label} right edge should stay in the Inspector`).toBeLessThanOrEqual(measurement.panel.right);
+  expect.soft(measurement.bottom, `${label} bottom edge should stay in the Inspector`).toBeLessThanOrEqual(measurement.panel.bottom);
+  expect.soft(measurement.left, `${label} left edge should stay in the viewport`).toBeGreaterThanOrEqual(0);
+  expect.soft(measurement.top, `${label} top edge should stay in the viewport`).toBeGreaterThanOrEqual(0);
+  expect.soft(measurement.right, `${label} right edge should stay in the viewport`).toBeLessThanOrEqual(measurement.viewport.width);
+  expect.soft(measurement.bottom, `${label} bottom edge should stay in the viewport`).toBeLessThanOrEqual(measurement.viewport.height);
+  expect.soft(measurement.centerHit, `${label} center should be hit-testable`).toBe(true);
+}
+
 function expectToolbarControlUsable(measurement, label) {
   expect(measurement.active, `${label} should have keyboard focus`).toBe(true);
   expect(measurement.container, `${label} should belong to the world toolbar`).not.toBeNull();
@@ -338,6 +351,80 @@ for (const viewport of [{ width: 320, height: 360 }, { width: 390, height: 360 }
     expect(afterDetailsScroll.details.clientHeight).toBeGreaterThanOrEqual(48);
   });
 }
+
+test('single-item Inspector and toolbar remain readable and reachable at 320x360 with 200% text', async ({ page }) => {
+  const viewport = { width: 320, height: 360 };
+  const clue = 'The recorder caught a fragment through the wavering chamber echo. '.repeat(24).slice(0, 980);
+  const panel = await openCalibrationInspector(page, viewport, 2, { clue });
+  const initial = await measurePanelAndDocument(page);
+
+  await expect(page.locator('html')).toHaveCSS('--text-scale', '2');
+  expect(initial.viewport).toEqual(viewport);
+  expect(initial.panel.left).toBeGreaterThanOrEqual(0);
+  expect(initial.panel.top).toBeGreaterThanOrEqual(0);
+  expect(initial.panel.right).toBeLessThanOrEqual(viewport.width);
+  expect(initial.panel.bottom).toBeLessThanOrEqual(viewport.height);
+  expect(initial.panelBottomInset, '200% Inspector should retain a safe viewport margin').toBeGreaterThanOrEqual(8);
+  expect(initial.panelToolbarIntersection.overlaps, '200% Inspector should not cover the world toolbar').toBe(false);
+  expect(initial.document.scrollWidth, '200% Inspector should not create page-level horizontal overflow').toBeLessThanOrEqual(viewport.width);
+  expect(initial.panel.scrollWidth, 'Inspector panel should not overflow horizontally').toBeLessThanOrEqual(initial.panel.clientWidth + 1);
+  expect(initial.details.clientHeight, '200% Inspector details should retain a usable scrollport').toBeGreaterThanOrEqual(48);
+  expect(initial.details.scrollHeight, 'long Inspector clue should be reachable by internal scrolling').toBeGreaterThan(initial.details.clientHeight);
+
+  const clueText = panel.locator('.item-clue');
+  const clueDimensions = await clueText.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+  expect(clueDimensions.scrollWidth, '200% clue text should wrap without horizontal clipping')
+    .toBeLessThanOrEqual(clueDimensions.clientWidth + 1);
+  expect(clueDimensions.scrollHeight, 'the clue paragraph should expose its full text within the details scroll area')
+    .toBeLessThanOrEqual(clueDimensions.clientHeight + 1);
+
+  const inspectorControls = [
+    [panel.getByRole('button', { name: 'Close item inspector' }), 'Close'],
+    [page.getByTestId('move-target'), 'destination selector'],
+    [page.getByTestId('move-item'), 'Move'],
+    [panel.getByRole('button', { name: 'Focus this object in the lab' }), 'Focus'],
+  ];
+  for (const [index, [control, label]] of inspectorControls.entries()) {
+    if (index === 0) await control.focus();
+    else await tabUntilFocused(page, control);
+    expectControlUsable(await measureFocusedControl(page, control), `${label} action at 200%`);
+  }
+
+  const toolbarControls = [
+    [page.getByRole('button', { name: 'Zoom out' }), 'Zoom out'],
+    [page.getByRole('button', { name: 'Zoom in' }), 'Zoom in'],
+    [page.getByTestId('world-jump'), 'World jump'],
+    [page.getByRole('button', { name: 'Reset view' }), 'Reset view'],
+    [page.getByRole('button', { name: 'Find an item' }), 'Find an item'],
+    [page.getByTestId('multi-selection-toggle'), 'Select multiple items'],
+  ];
+  for (const [index, [control, label]] of toolbarControls.entries()) {
+    if (index === 0) await control.focus();
+    else await tabUntilFocused(page, control);
+    expectToolbarControlUsable(await measureFocusedControl(page, control), `${label} at 200%`);
+  }
+  await assertToolbarTextDoesNotOverflow(page, 200);
+
+  const panelBeforeDetailsScroll = await panel.boundingBox();
+  const documentBeforeDetailsScroll = await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
+  const details = panel.locator('.item-inspector__details');
+  await details.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await expect.poll(() => details.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  const afterDetailsScroll = await measurePanelAndDocument(page);
+  expect(afterDetailsScroll.panel).toMatchObject({
+    left: panelBeforeDetailsScroll.x,
+    top: panelBeforeDetailsScroll.y,
+    width: panelBeforeDetailsScroll.width,
+    height: panelBeforeDetailsScroll.height,
+  });
+  expect(afterDetailsScroll.document).toMatchObject({ scrollX: documentBeforeDetailsScroll.x, scrollY: documentBeforeDetailsScroll.y });
+  expect(afterDetailsScroll.details.scrollTop).toBeGreaterThan(0);
+});
 
 for (const viewport of [{ width: 320, height: 480 }, { width: 390, height: 480 }]) {
   test(`Inspector at 150% keeps controls operable at ${viewport.width}×${viewport.height}`, async ({ page }) => {
@@ -615,6 +702,150 @@ test('third-row group selection keeps the compact Inspector and toolbar controls
   expect(countMeasurement.bottom).toBeLessThanOrEqual(viewport.height);
   expect(countMeasurement.centerHit, 'selection-count center should be hit-testable').toBe(true);
   await assertToolbarTextDoesNotOverflow(page, 150);
+});
+
+test('200% group Inspector keeps all eight evidence rows reachable by keyboard at 320x360', async ({ page }) => {
+  const viewport = { width: 320, height: 360 };
+  await page.setViewportSize(viewport);
+  const initialState = createNewGameState();
+  await page.addInitScript(({ preferencesKey }) => {
+    window.localStorage.clear();
+    window.localStorage.setItem(preferencesKey, JSON.stringify({
+      version: 1,
+      textScale: 2,
+      reduceMotion: false,
+      soundEffectsEnabled: false,
+    }));
+  }, { preferencesKey: PREFERENCES_STORAGE_KEY });
+  await page.goto('/');
+  await expect(page.locator('html')).toHaveCSS('--text-scale', '2');
+
+  const selectionToggle = page.getByTestId('multi-selection-toggle');
+  await selectionToggle.focus();
+  await selectionToggle.press('Enter');
+  await expect(selectionToggle).toHaveAttribute('aria-pressed', 'true');
+
+  const itemIds = Array.from({ length: 8 }, (_, index) => `calibration-card-${String(index + 1).padStart(2, '0')}`);
+  const findButton = page.getByRole('button', { name: 'Find an item', exact: true });
+  const search = page.getByRole('searchbox', { name: 'Search laboratory items' });
+  const selectedCount = page.getByTestId('multi-selection-count');
+  for (const [index, itemId] of itemIds.entries()) {
+    await findButton.focus();
+    await findButton.press('Enter');
+    await expect(search).toBeFocused();
+    await search.fill(itemId);
+    const result = page.getByTestId(`item-finder-result-${itemId}`);
+    await expect(result).toBeVisible();
+    await result.focus();
+    await result.press('Enter');
+    await expect(selectedCount).toHaveText(`${index + 1} selected`);
+  }
+
+  const panel = page.getByTestId('item-inspector');
+  const summary = panel.getByTestId('selected-items-summary');
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole('heading', { name: '8 objects selected' })).toBeVisible();
+  expect.soft(summary).toHaveRole('region');
+  expect.soft(summary).toHaveAccessibleName('Selected objects and evidence');
+  const rows = summary.getByRole('listitem');
+  await expect(rows).toHaveCount(8);
+  const calibrationItems = itemIds.map((itemId) => initialState.items.find((item) => item.id === itemId));
+  for (const item of calibrationItems) {
+    const row = rows.filter({ has: page.getByText(item.title, { exact: true }) });
+    await expect(row).toHaveCount(1);
+    await expect(row.locator('.selected-item-family')).toHaveText(item.family);
+    await expect(row.locator('.selected-item-clue')).toHaveText(item.clue);
+  }
+
+  const layout = await measurePanelAndDocument(page);
+  expect(layout.viewport).toEqual(viewport);
+  expect(layout.panel.left).toBeGreaterThanOrEqual(0);
+  expect(layout.panel.top).toBeGreaterThanOrEqual(0);
+  expect(layout.panel.right).toBeLessThanOrEqual(viewport.width);
+  expect(layout.panel.bottom).toBeLessThanOrEqual(viewport.height);
+  expect(layout.document.scrollWidth, 'group Inspector should not create page-level horizontal overflow').toBeLessThanOrEqual(viewport.width);
+  expect(layout.toolbar.left).toBeGreaterThanOrEqual(0);
+  expect(layout.toolbar.right).toBeLessThanOrEqual(viewport.width);
+  expect(layout.toolbar.top).toBeGreaterThanOrEqual(0);
+  expect(layout.toolbar.bottom).toBeLessThanOrEqual(viewport.height);
+  expect(layout.panelToolbarIntersection.overlaps, 'group Inspector should stay clear of the toolbar').toBe(false);
+
+  const close = panel.getByRole('button', { name: 'Close item inspector' });
+  const target = page.getByTestId('move-target');
+  const move = page.getByTestId('move-selected-items');
+  await expect(move).toHaveAccessibleName('Move 8 selected items');
+  await close.focus();
+  expectControlUsableSoft(await measureFocusedControl(page, close), 'group Inspector Close at 200%');
+  await target.focus();
+  const initialTargetMeasurement = await measureFocusedControl(page, target);
+  expect.soft(initialTargetMeasurement.right - initialTargetMeasurement.left, 'group destination selector should retain at least 120px of width')
+    .toBeGreaterThanOrEqual(120);
+  expectControlUsableSoft(initialTargetMeasurement, 'group destination selector at 200%');
+  await move.focus();
+  expectControlUsableSoft(await measureFocusedControl(page, move), 'group Move at 200%');
+
+  await close.focus();
+  const beforeKeyboardScroll = await summary.evaluate((details) => ({
+    scrollTop: details.scrollTop,
+    clientHeight: details.clientHeight,
+    scrollHeight: details.scrollHeight,
+  }));
+  expect.soft(beforeKeyboardScroll.scrollHeight, 'the selected-items evidence list should overflow its scroll region')
+    .toBeGreaterThan(beforeKeyboardScroll.clientHeight);
+  expect.soft(beforeKeyboardScroll.clientHeight, 'the selected-items evidence region should keep visible scrolling space')
+    .toBeGreaterThan(0);
+  await page.keyboard.press('Tab');
+  const evidenceRegionFocused = await summary.evaluate((details) => document.activeElement === details);
+  expect.soft(evidenceRegionFocused, 'Tab from Close should focus the selected-items evidence scroll region').toBe(true);
+  await page.keyboard.press('PageDown');
+  const afterPageDown = await summary.evaluate((details) => ({
+    scrollTop: details.scrollTop,
+    focused: document.activeElement === details,
+  }));
+  await page.keyboard.press('End');
+  const afterEnd = await summary.evaluate((details) => {
+    const detailsRect = details.getBoundingClientRect();
+    const lastClue = details.querySelector('.selected-item-list > li:last-child .selected-item-clue');
+    const clueRect = lastClue.getBoundingClientRect();
+    return {
+      scrollTop: details.scrollTop,
+      focused: document.activeElement === details,
+      lastClueVisible: clueRect.top >= detailsRect.top - 1 && clueRect.bottom <= detailsRect.bottom + 1,
+    };
+  });
+  expect.soft(afterPageDown.focused, 'the evidence region should retain focus after PageDown').toBe(true);
+  expect.soft(afterEnd.focused, 'the evidence region should retain focus after End').toBe(true);
+  expect.soft(afterPageDown.scrollTop, 'PageDown should scroll the selected-items evidence region').toBeGreaterThan(beforeKeyboardScroll.scrollTop);
+  expect.soft(afterEnd.scrollTop, 'End should scroll the selected-items evidence region to its end').toBeGreaterThan(afterPageDown.scrollTop);
+  expect.soft(afterEnd.lastClueVisible, 'End should expose the eighth calibration-card clue').toBe(true);
+
+  await target.focus();
+  const targetMeasurementAfterScroll = await measureFocusedControl(page, target);
+  expect.soft(targetMeasurementAfterScroll.right - targetMeasurementAfterScroll.left, 'group destination selector should remain at least 120px wide after evidence scrolling')
+    .toBeGreaterThanOrEqual(120);
+  expectControlUsableSoft(targetMeasurementAfterScroll, 'group destination selector after evidence scrolling');
+  await target.selectOption('scratch-a');
+  await expect(target).toHaveValue('scratch-a');
+  await move.focus();
+  expectControlUsableSoft(await measureFocusedControl(page, move), 'group Move after evidence scrolling');
+  await move.press('Enter');
+
+  await expect.poll(async () => {
+    const savedValue = await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey);
+    if (!savedValue) return false;
+    const savedState = decodeSave(savedValue);
+    return itemIds.every((itemId) => {
+      const item = savedState.items.find((entry) => entry.id === itemId);
+      return item?.placement.kind === 'scratchpad' && item.placement.scratchPadId === 'scratch-a';
+    });
+  }).toBe(true);
+  const savedState = decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey));
+  for (const itemId of itemIds) {
+    const item = savedState.items.find((entry) => entry.id === itemId);
+    expect(item.placement).toMatchObject({ kind: 'scratchpad', scratchPadId: 'scratch-a' });
+  }
+  expect(savedState.progress.completedCollectionIds).not.toContain('harmonic-calibration');
+  expect(savedState.progress.skillPoints).toBe(0);
 });
 
 for (const viewport of [

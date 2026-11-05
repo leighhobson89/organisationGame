@@ -66,6 +66,18 @@ export function useGamePersistence() {
     coordinator.schedule(game);
   }, [autosaveEnabled, game]);
 
+  useEffect(() => {
+    if (saveStatus !== 'Saving…') return;
+
+    const confirmPendingSave = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', confirmPendingSave);
+    return () => window.removeEventListener('beforeunload', confirmPendingSave);
+  }, [saveStatus]);
+
   const openSaveDialog = useCallback(() => {
     try { setSaveText(encodeSave(game)); } catch { setSaveText(''); }
   }, [game]);

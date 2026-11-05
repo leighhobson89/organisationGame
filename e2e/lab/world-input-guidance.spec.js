@@ -80,3 +80,62 @@ test('coarse-pointer world hints describe empty-space drag and pinch zoom', asyn
     await context.close();
   }
 });
+
+test('keyboard pan guidance appears when the world viewport is focused', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 360 });
+  await page.addInitScript(() => window.localStorage.clear());
+  await page.goto('/');
+
+  const world = page.getByTestId('world-viewport');
+  const scene = page.locator('.world-scene');
+  const cue = page.locator('.world-hint__keyboard-guidance');
+  await expect(world).toBeVisible();
+  await expect(world).not.toBeFocused();
+  await expect.soft(cue).toHaveCount(1);
+  await expect(cue).toBeHidden();
+
+  let reachedWorldByTab = false;
+  for (let tabPress = 0; tabPress < 50; tabPress += 1) {
+    await page.keyboard.press('Tab');
+    if (await world.evaluate((element) => element === document.activeElement)) {
+      reachedWorldByTab = true;
+      break;
+    }
+  }
+  expect(reachedWorldByTab, 'Tab traversal should focus the world viewport').toBe(true);
+  await expect(world).toBeFocused();
+  expect(await world.evaluate((element) => element.matches(':focus-visible')),
+    'keyboard traversal should show the viewport focus indicator').toBe(true);
+  await expect.soft(cue).toBeVisible();
+
+  if (await cue.count() && await cue.isVisible()) {
+    await expect(cue).toContainText(/Use arrow keys to pan/i);
+    const [cueBox, hintBox, toolbarBox, viewportSize] = await Promise.all([
+      cue.boundingBox(),
+      page.locator('.world-hint').boundingBox(),
+      page.locator('.game-toolbar').boundingBox(),
+      page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })),
+    ]);
+    expect(cueBox, 'focused keyboard guidance should have rendered bounds').not.toBeNull();
+    expect(hintBox, 'focused world hint should have rendered bounds').not.toBeNull();
+    expect(toolbarBox, 'world toolbar should have rendered bounds').not.toBeNull();
+    for (const [label, box] of [['keyboard guidance', cueBox], ['world hint', hintBox]]) {
+      expect(box.x, `${label} should stay inside the compact viewport on the left`).toBeGreaterThanOrEqual(0);
+      expect(box.y, `${label} should stay inside the compact viewport at the top`).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width, `${label} should stay inside the compact viewport on the right`)
+        .toBeLessThanOrEqual(viewportSize.width);
+      expect(box.y + box.height, `${label} should stay inside the compact viewport at the bottom`)
+        .toBeLessThanOrEqual(viewportSize.height);
+      const overlapsToolbar = box.x < toolbarBox.x + toolbarBox.width
+        && box.x + box.width > toolbarBox.x
+        && box.y < toolbarBox.y + toolbarBox.height
+        && box.y + box.height > toolbarBox.y;
+      expect(overlapsToolbar, `${label} should not overlap the compact world toolbar`).toBe(false);
+    }
+  }
+
+  const beforeArrowRight = await scene.evaluate((element) => element.style.transform);
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(() => scene.evaluate((element) => element.style.transform))
+    .not.toBe(beforeArrowRight);
+});

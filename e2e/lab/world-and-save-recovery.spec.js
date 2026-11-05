@@ -9,6 +9,7 @@ import LZString from 'lz-string';
 
 const autoSaveKey = 'palimpsest-laboratory.autosave.v1';
 const backupKey = 'palimpsest-laboratory.backup.v1';
+const recoveryKey = 'palimpsest-laboratory.recovery.v1';
 const calibrationCard = 'calibration-card-01';
 
 async function moveWithInspector(page, itemId, targetId) {
@@ -791,6 +792,55 @@ test('valid import restores the exported laboratory state', async ({ page }) => 
   await waitForAutosave(page);
 });
 
+test('pending autosave warns before reload and preserves a newly filed item', async ({ page }) => {
+  await page.goto('/');
+  await waitForAutosave(page);
+
+  await moveWithInspector(page, calibrationCard, 'cabinet-calibration');
+  await expect(page.getByTestId('destination-cabinet-calibration'))
+    .toHaveAttribute('aria-label', /1 of 8 objects placed/i);
+  await expect(page.getByTestId('autosave-status')).toHaveText('Saving…');
+
+  const runtimeToken = await page.evaluate(() => {
+    window.__autosaveRegressionRuntime = crypto.randomUUID();
+    return window.__autosaveRegressionRuntime;
+  });
+  const pendingDialogPromise = page.waitForEvent('dialog', { timeout: 1500 });
+  const reloadPromise = page.reload({ timeout: 3000 }).then(
+    (response) => ({ response }),
+    (error) => ({ error }),
+  );
+  const pendingDialog = await pendingDialogPromise;
+  expect(pendingDialog.type()).toBe('beforeunload');
+  await pendingDialog.dismiss();
+  const canceledReload = await reloadPromise;
+  expect(canceledReload.error?.name).toBe('TimeoutError');
+
+  expect(await page.evaluate(() => window.__autosaveRegressionRuntime)).toBe(runtimeToken);
+  await expect(page.getByTestId('destination-cabinet-calibration'))
+    .toHaveAttribute('aria-label', /1 of 8 objects placed/i);
+  await waitForAutosave(page);
+
+  const savedRaw = await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey);
+  expect(savedRaw).not.toBeNull();
+  const savedState = decodeSave(savedRaw);
+  const savedCard = savedState.items.find((item) => item.id === calibrationCard);
+  expect(savedCard.placement).toEqual({ kind: 'destination', destinationId: 'cabinet-calibration', slotIndex: 0 });
+
+  let unexpectedDialogType;
+  page.once('dialog', async (dialog) => {
+    unexpectedDialogType = dialog.type();
+    await dialog.dismiss();
+  });
+  await page.reload();
+  expect(unexpectedDialogType).toBeUndefined();
+  await waitForAutosave(page);
+  await expect(page.getByTestId('destination-cabinet-calibration'))
+    .toHaveAttribute('aria-label', /1 of 8 objects placed/i);
+  const reloadedState = decodeSave(await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey));
+  expect(reloadedState.items.find((item) => item.id === calibrationCard).placement).toEqual(savedCard.placement);
+});
+
 test('Save & Restore exports the latest state when opened during the autosave debounce', async ({ page }) => {
   await page.goto('/');
   await waitForAutosave(page);
@@ -1022,4 +1072,71 @@ test('a corrupt startup autosave is preserved until the player explicitly starts
   await waitForAutosave(page);
   const replacedAutosave = await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey);
   expect(replacedAutosave).not.toBe(corruptRaw);
+});
+
+test('recovers a valid backup when startup autosave is corrupt and preserves the original bytes', async ({ page }) => {
+  const corruptRaw = 'corrupt-autosave-raw-bytes-to-preserve';
+  const backupState = createNewGameState();
+  backupState.progress.skillPoints = 37;
+  const validBackup = encodeSave(backupState);
+
+  await page.addInitScript(({ autosaveKey, corruptedValue, backupStorageKey, backupValue }) => {
+    window.localStorage.clear();
+    window.localStorage.setItem(autosaveKey, corruptedValue);
+    window.localStorage.setItem(backupStorageKey, backupValue);
+  }, {
+    autosaveKey: autoSaveKey,
+    corruptedValue: corruptRaw,
+    backupStorageKey: backupKey,
+    backupValue: validBackup,
+  });
+
+  await page.goto('/');
+  await expect(page.getByTestId('world-item-count')).toContainText('174');
+  await expect(page.getByTestId('recovery-notice')).toHaveAttribute('role', 'alert');
+  await expect(page.getByTestId('recovery-notice')).toContainText(/recovered from its backup/i);
+  await expect(page.getByTestId('recovery-notice')).toContainText(/original autosave was preserved/i);
+  await expect(page.getByTestId('skill-points')).toContainText('Skill points: 37');
+  await waitForAutosave(page);
+
+  const recoveredAutosave = await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey);
+  expect(recoveredAutosave).not.toBe(corruptRaw);
+  expect(decodeSave(recoveredAutosave).progress.skillPoints).toBe(37);
+  expect(await page.evaluate((key) => window.localStorage.getItem(key), recoveryKey)).toBe(corruptRaw);
+  expect(await page.evaluate((key) => window.localStorage.getItem(key), backupKey)).toBe(validBackup);
+
+  await page.reload();
+  await expect(page.getByTestId('world-item-count')).toContainText('174');
+  await expect(page.getByTestId('skill-points')).toContainText('Skill points: 37');
+  await waitForAutosave(page);
+
+  const reloadedAutosave = await page.evaluate((key) => window.localStorage.getItem(key), autoSaveKey);
+  expect(decodeSave(reloadedAutosave).progress.skillPoints).toBe(37);
+  expect(await page.evaluate((key) => window.localStorage.getItem(key), recoveryKey)).toBe(corruptRaw);
+  expect(await page.evaluate((key) => window.localStorage.getItem(key), backupKey)).toBe(validBackup);
+});
+
+test('browser storage is unavailable at startup but the fresh laboratory remains playable', async ({ page }) => {
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get() {
+        throw new DOMException('Local storage is blocked for this test.', 'SecurityError');
+      },
+    });
+  });
+
+  await page.goto('/');
+  await expect(page.getByTestId('world-item-count')).toContainText('174');
+  await expect(page.getByTestId('recovery-notice')).toHaveAttribute('role', 'alert');
+  await expect(page.getByTestId('recovery-notice')).toContainText(/browser storage is unavailable/i);
+  await expect(page.getByTestId('recovery-notice')).toContainText(/can be played/i);
+  await expect(page.getByTestId('autosave-status')).toHaveText('Autosave unavailable');
+
+  await page.getByTestId('lab-item-calibration-card-01').click();
+  await expect(page.getByTestId('item-inspector')).toBeVisible();
+  expect(pageErrors, 'storage unavailability should not cause uncaught startup or interaction errors').toEqual([]);
 });

@@ -154,6 +154,35 @@ async function assertVisibleToolbarTargetsAreUsable(page) {
   }
 }
 
+async function expectToolbarOverflowCueState(page, toolbar, { left, right }) {
+  for (const { edge, selector, visible } of [
+    { edge: 'left', selector: '.game-toolbar-overflow-cue--left', visible: left },
+    { edge: 'right', selector: '.game-toolbar-overflow-cue--right', visible: right },
+  ]) {
+    const cue = page.locator(selector);
+    await expect(cue).toHaveCount(visible ? 1 : 0);
+    if (!visible) continue;
+
+    await expect(cue).toHaveCSS('pointer-events', 'none');
+    await expect.poll(() => page.evaluate(({ cueSelector, cueEdge }) => {
+      const rail = document.querySelector('.game-toolbar');
+      const cueElement = document.querySelector(cueSelector);
+      if (!rail || !cueElement) return Number.POSITIVE_INFINITY;
+
+      const railRect = rail.getBoundingClientRect();
+      const cueRect = cueElement.getBoundingClientRect();
+      const cueCenter = cueRect.left + cueRect.width / 2;
+      const targetCenter = cueEdge === 'left' ? railRect.left - 5 : railRect.right + 5;
+      return Math.abs(cueCenter - targetCenter);
+    }, { cueSelector: selector, cueEdge: edge })).toBeLessThanOrEqual(1);
+
+    const isSibling = await cue.evaluate((element) => (
+      element.parentElement === document.querySelector('.game-toolbar')?.parentElement
+    ));
+    expect(isSibling, `${edge} overflow cue should sit beside the toolbar rail`).toBe(true);
+  }
+}
+
 async function assertCompactToolbarBoundsAndNoPageOverflow(page, viewport) {
   const measurements = await page.evaluate(() => {
     const toolbar = document.querySelector('.game-toolbar');
@@ -277,6 +306,41 @@ async function assertFirstActionLeadReadable(page) {
   }));
   expect(dimensions.scrollWidth, 'first-action lead should not be clipped horizontally').toBeLessThanOrEqual(dimensions.clientWidth + 1);
   expect(dimensions.scrollHeight, 'first-action lead should not be clipped vertically').toBeLessThanOrEqual(dimensions.clientHeight + 1);
+}
+
+async function assertFreshStartClueExposedAndHitTestable(page, locator) {
+  await expect(locator, 'the first calibration clue should be present in the fresh world').toBeVisible();
+  const geometry = await locator.evaluate((element) => {
+    const target = element.getBoundingClientRect();
+    const hint = document.querySelector('.world-hint')?.getBoundingClientRect();
+    const toolbar = document.querySelector('.game-toolbar')?.getBoundingClientRect();
+    const world = document.querySelector('[data-testid="world-viewport"]')?.getBoundingClientRect();
+    const overlapArea = (overlay) => {
+      if (!overlay) return 0;
+      const width = Math.max(0, Math.min(target.right, overlay.right) - Math.max(target.left, overlay.left));
+      const height = Math.max(0, Math.min(target.bottom, overlay.bottom) - Math.max(target.top, overlay.top));
+      return width * height;
+    };
+    const hit = document.elementFromPoint(target.left + target.width / 2, target.top + target.height / 2);
+    return {
+      inWindow: target.left >= 0 && target.top >= 0
+        && target.right <= window.innerWidth && target.bottom <= window.innerHeight,
+      insideWorld: Boolean(world && target.left >= world.left - 1 && target.top >= world.top - 1
+        && target.right <= world.right + 1 && target.bottom <= world.bottom + 1),
+      overlapsHint: overlapArea(hint) > 0,
+      overlapsToolbar: overlapArea(toolbar) > 0,
+      centerHit: hit === element || element.contains(hit),
+      target: { left: target.left, top: target.top, right: target.right, bottom: target.bottom },
+      hint: hint ? { left: hint.left, top: hint.top, right: hint.right, bottom: hint.bottom } : null,
+      toolbar: toolbar ? { left: toolbar.left, top: toolbar.top, right: toolbar.right, bottom: toolbar.bottom } : null,
+    };
+  });
+
+  expect.soft(geometry.inWindow, `first clue bounds should stay in the browser viewport (${JSON.stringify(geometry)})`).toBe(true);
+  expect.soft(geometry.insideWorld, `first clue bounds should stay inside the world viewport (${JSON.stringify(geometry)})`).toBe(true);
+  expect.soft(geometry.overlapsHint, `first clue should not be covered by the world hint (${JSON.stringify(geometry)})`).toBe(false);
+  expect.soft(geometry.overlapsToolbar, `first clue should not be covered by the toolbar (${JSON.stringify(geometry)})`).toBe(false);
+  expect.soft(geometry.centerHit, `first clue should be hit-testable at its center (${JSON.stringify(geometry)})`).toBe(true);
 }
 
 async function assertSelectionGuidance(page) {
@@ -418,6 +482,142 @@ async function assertSelectionToastGeometry(page, viewport) {
   }
 }
 
+test('compact toolbar overflow cues track scroll edges without blocking controls', async ({ browser }) => {
+  const context = await browser.newContext({
+    baseURL: 'http://127.0.0.1:5173',
+    viewport: { width: 320, height: 360 },
+  });
+  try {
+    const page = await context.newPage();
+    await page.goto('/');
+
+    const toolbar = page.getByRole('group', { name: 'World navigation controls' });
+    await expect(toolbar).toBeVisible();
+    const initialScroll = await toolbar.evaluate((element) => ({
+      left: element.scrollLeft,
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    expect(initialScroll.left).toBe(0);
+    expect(initialScroll.scrollWidth, 'the compact toolbar should expose a horizontally scrollable control rail')
+      .toBeGreaterThan(initialScroll.clientWidth);
+    await expectToolbarOverflowCueState(page, toolbar, { left: false, right: true });
+
+    const nearbyControl = page.getByRole('button', { name: 'Zoom in', exact: true });
+    const receivesPointer = await nearbyControl.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return hit === element || element.contains(hit);
+    });
+    expect(receivesPointer, 'the nearby Zoom in control should remain hit-testable beside the overflow cue')
+      .toBe(true);
+
+    await toolbar.evaluate((element) => {
+      element.scrollLeft = (element.scrollWidth - element.clientWidth) / 2;
+      element.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+    await expectToolbarOverflowCueState(page, toolbar, { left: true, right: true });
+
+    await toolbar.evaluate((element) => {
+      element.scrollLeft = element.scrollWidth;
+      element.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+    await expect.poll(() => toolbar.evaluate((element) => element.scrollLeft))
+      .toBeGreaterThan(initialScroll.left);
+    await expectToolbarOverflowCueState(page, toolbar, { left: true, right: false });
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect.poll(() => toolbar.evaluate((element) => element.scrollWidth <= element.clientWidth))
+      .toBe(true);
+    await expectToolbarOverflowCueState(page, toolbar, { left: false, right: false });
+  } finally {
+    await context.close();
+  }
+});
+
+test('wheel input over the compact toolbar scrolls its rail without moving the world at 320x360', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 360 });
+  await page.goto('/');
+  await expect(page.getByTestId('world-item-count')).toBeVisible();
+
+  const toolbar = page.locator('.game-toolbar');
+  const scene = page.locator('.world-scene');
+  const readout = page.locator('.zoom-readout');
+  const jump = page.getByTestId('world-jump');
+  const announcer = page.getByTestId('zoom-announcer');
+  const overflow = await toolbar.evaluate((element) => ({
+    scrollLeft: element.scrollLeft,
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(overflow.scrollWidth, 'the compact toolbar should have horizontal overflow').toBeGreaterThan(overflow.clientWidth);
+
+  const readState = async () => ({
+    scrollLeft: await toolbar.evaluate((element) => element.scrollLeft),
+    transform: await scene.evaluate((element) => element.style.transform),
+    zoom: await readout.innerText(),
+    announcement: await announcer.innerText(),
+  });
+  const initial = await readState();
+  const readoutBounds = await readout.boundingBox();
+  expect(readoutBounds).not.toBeNull();
+  await page.mouse.move(readoutBounds.x + readoutBounds.width / 2, readoutBounds.y + readoutBounds.height / 2);
+
+  await page.mouse.wheel(0, 120);
+  await page.waitForTimeout(350);
+  const afterVerticalWheel = await readState();
+
+  await page.mouse.wheel(120, 0);
+  await page.waitForTimeout(350);
+  const afterHorizontalWheel = await readState();
+
+  await toolbar.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
+  const worldItemCount = page.getByTestId('world-item-count');
+  const countBounds = await worldItemCount.boundingBox();
+  expect(countBounds).not.toBeNull();
+  await page.mouse.move(countBounds.x + countBounds.width / 2, countBounds.y + countBounds.height / 2);
+  const hitWorldItemCount = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-testid="world-item-count"]') !== null, {
+    x: countBounds.x + countBounds.width / 2,
+    y: countBounds.y + countBounds.height / 2,
+  });
+  expect(hitWorldItemCount, 'edge wheel input should target a noninteractive toolbar item').toBe(true);
+  const beforeEdgeWheel = await readState();
+  await page.mouse.wheel(0, 120);
+  await page.waitForTimeout(350);
+  const afterEdgeWheel = await readState();
+
+  expect.soft(afterVerticalWheel.scrollLeft, 'vertical wheel input should advance the toolbar rail').toBeGreaterThan(initial.scrollLeft);
+  expect.soft(afterVerticalWheel.transform, 'vertical wheel input over the toolbar should preserve the camera transform').toBe(initial.transform);
+  expect.soft(afterVerticalWheel.zoom, 'vertical wheel input over the toolbar should preserve the zoom readout').toBe(initial.zoom);
+  expect.soft(afterVerticalWheel.announcement, 'vertical wheel input over the toolbar should not announce a zoom change').toBe(initial.announcement);
+
+  expect.soft(afterHorizontalWheel.scrollLeft, 'horizontal wheel input should advance the toolbar rail').toBeGreaterThan(afterVerticalWheel.scrollLeft);
+  expect.soft(afterHorizontalWheel.transform, 'horizontal wheel input over the toolbar should preserve the camera transform').toBe(afterVerticalWheel.transform);
+  expect.soft(afterHorizontalWheel.zoom, 'horizontal wheel input over the toolbar should preserve the zoom readout').toBe(afterVerticalWheel.zoom);
+  expect.soft(afterHorizontalWheel.announcement, 'horizontal wheel input over the toolbar should not announce a zoom change').toBe(afterVerticalWheel.announcement);
+
+  expect.soft(afterEdgeWheel.scrollLeft, 'vertical wheel input at the toolbar rail edge should not move the rail farther').toBe(beforeEdgeWheel.scrollLeft);
+  expect.soft(afterEdgeWheel.transform, 'vertical wheel input at the toolbar rail edge should leave the camera unchanged').toBe(beforeEdgeWheel.transform);
+  expect.soft(afterEdgeWheel.zoom, 'vertical wheel input at the toolbar rail edge should leave the zoom readout unchanged').toBe(beforeEdgeWheel.zoom);
+  expect.soft(afterEdgeWheel.announcement, 'vertical wheel input at the toolbar rail edge should not announce a zoom change').toBe(beforeEdgeWheel.announcement);
+
+  await toolbar.evaluate((element) => { element.scrollLeft = 0; });
+  const beforeSelectWheel = await readState();
+  const jumpBounds = await jump.boundingBox();
+  expect(jumpBounds).not.toBeNull();
+  await jump.focus();
+  await page.mouse.move(jumpBounds.x + jumpBounds.width / 2, jumpBounds.y + jumpBounds.height / 2);
+  const hitJump = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('#world-jump') !== null, {
+    x: jumpBounds.x + jumpBounds.width / 2,
+    y: jumpBounds.y + jumpBounds.height / 2,
+  });
+  expect(hitJump, 'wheel input should target the native World Jump selector').toBe(true);
+  await page.mouse.wheel(0, 120);
+  await page.waitForTimeout(350);
+  const afterSelectWheel = await readState();
+  expect.soft(afterSelectWheel.scrollLeft, 'wheel input over World Jump should remain available to the native select').toBe(beforeSelectWheel.scrollLeft);
+});
+
 test('mobile world toolbar keeps controls readable, visible, and separated at 390x480', async ({ page }) => {
   const viewport = { width: 390, height: 480 };
   await page.setViewportSize(viewport);
@@ -427,10 +627,12 @@ test('mobile world toolbar keeps controls readable, visible, and separated at 39
   await assertFirstActionGuidance(page);
 
   const jump = page.getByRole('combobox', { name: 'Jump to laboratory location' });
+  const engineOption = jump.locator('option[value="engine"]');
+  await expect(engineOption).toHaveText('Palimpsest Engine');
   await jump.selectOption('engine');
-  await expect(jump).toHaveValue('engine');
-  await expect(jump.locator('option:checked')).toHaveText('Palimpsest Engine');
-  expect.soft((await jump.boundingBox()).width, 'mobile location selector should retain enough width for its selected destination').toBeGreaterThanOrEqual(154);
+  await expect(jump).toHaveValue('');
+  await expect(jump.locator('option:checked')).toHaveText('Jump to location');
+  expect.soft((await jump.boundingBox()).width, 'mobile location selector should retain its usable width after the value resets').toBeGreaterThanOrEqual(154);
 
   await assertToolbarGeometry(page, viewport);
   await assertHintDoesNotOverlapToolbar(page, 'normal');
@@ -585,6 +787,25 @@ test('the Inspector keeps full guidance and its toolbar layout at 320x360 with 1
   await assertCompactToolbarTargetsWorkThroughKeyboardScroll(page, { expectedPageScroll: initialScroll });
   const finalToolbarScroll = await toolbar.evaluate((element) => element.scrollLeft);
   expect(finalToolbarScroll, 'keyboard focus should scroll the compact rail to later toolbar actions').toBeGreaterThan(initialToolbarScroll);
+});
+
+test('200% text keeps the fresh 320x360 world readable and its toolbar keyboard-accessible', async ({ page }) => {
+  const viewport = { width: 320, height: 360 };
+  await page.setViewportSize(viewport);
+  await page.goto('/');
+  await page.locator('html').evaluate((root) => root.style.setProperty('--text-scale', '2'));
+  await expect(page.locator('html')).toHaveCSS('--text-scale', '2');
+
+  const firstClue = page.getByTestId('lab-item-calibration-card-01');
+  await assertFreshStartClueExposedAndHitTestable(page, firstClue);
+
+  await expect(page.locator('.world-hint__lead')).toBeVisible();
+  await assertFirstActionLeadReadable(page);
+  await assertHintDoesNotOverlapToolbar(page, 'fresh start at 200%');
+  await assertHintFitsViewport(page, viewport, 'fresh start at 200%');
+  await assertToolbarTextIsNotClipped(page, 200);
+  await assertCompactToolbarBoundsAndNoPageOverflow(page, viewport);
+  await assertCompactToolbarTargetsWorkThroughKeyboardScroll(page, { expectedPageScroll: { x: 0, y: 0 } });
 });
 
 test('opening Clockwork Atlas clears the 125% multi-selection toast at 320x480', async ({ page }) => {

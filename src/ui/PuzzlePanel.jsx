@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 function choiceValue(choice) {
   if (choice && typeof choice === 'object') return choice.id ?? choice.value ?? choice.glyph ?? choice.label ?? String(choice);
@@ -16,8 +16,19 @@ export function PuzzlePanel({ puzzle, solved, onSolve, onClose, onSelectPuzzle, 
   const solution = useMemo(() => (puzzle.solution ?? []).map(choiceValue), [puzzle]);
   const [sequence, setSequence] = useState([]);
   const [result, setResult] = useState('');
+  const headingRef = useRef(null);
+  const firstChoiceRef = useRef(null);
   const panelTestId = isChronology ? 'chronology-puzzle-panel' : 'puzzle-panel';
   const submitLabel = isChronology ? 'Submit chronology' : 'Submit sequence';
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const firstChoice = firstChoiceRef.current;
+      if (firstChoice && !firstChoice.disabled) firstChoice.focus();
+      else headingRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
   useEffect(() => {
     setSequence([]);
@@ -51,7 +62,7 @@ export function PuzzlePanel({ puzzle, solved, onSolve, onClose, onSelectPuzzle, 
   return (
     <aside className="panel puzzle-panel" aria-label={puzzle.title ?? 'Laboratory puzzle'} data-testid={panelTestId}>
       <header className="panel-heading">
-        <div><p className="eyebrow">{isChronology ? 'Recovered timeline' : 'Recovered pattern'}</p><h2>{puzzle.title ?? 'Laboratory puzzle'}</h2></div>
+        <div><p className="eyebrow">{isChronology ? 'Recovered timeline' : 'Recovered pattern'}</p><h2 ref={headingRef} tabIndex={-1}>{puzzle.title ?? 'Laboratory puzzle'}</h2></div>
         <button type="button" className="panel-close" aria-label="Close puzzle panel" onClick={onClose}>×</button>
       </header>
       {unlockedPuzzles.length > 1 && onSelectPuzzle && (
@@ -98,6 +109,7 @@ export function PuzzlePanel({ puzzle, solved, onSolve, onClose, onSelectPuzzle, 
                   type="button"
                   className={`puzzle-symbol${isChronology ? ' puzzle-event' : ''}`}
                   data-testid={isChronology ? `chronology-event-${id}` : `puzzle-symbol-${index}`}
+                  ref={index === 0 ? firstChoiceRef : undefined}
                   aria-label={isChronology ? choiceLabel(choice) : `Pulse glyph ${choiceLabel(choice)}`}
                   aria-describedby={evidenceId}
                   disabled={sequence.length >= solution.length}

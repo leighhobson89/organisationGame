@@ -6,7 +6,7 @@ export const DEFAULT_PREFERENCES = Object.freeze({
   soundEffectsEnabled: false,
 });
 
-const SUPPORTED_TEXT_SCALES = new Set([1, 1.125, 1.25, 1.5]);
+const SUPPORTED_TEXT_SCALES = new Set([1, 1.125, 1.25, 1.5, 1.75, 2]);
 
 function copyDefaults() {
   return { ...DEFAULT_PREFERENCES };

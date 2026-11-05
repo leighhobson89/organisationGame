@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-03  
 **Session type:** Agent-led exploratory session using CUA; not independent human feedback  
-**Status:** The latest cumulative agent-led fresh-origin run completed all four current collections and both chapter puzzles, but it is not independent human feedback. Its manual reload after the chronology puzzle was not verified; a separate focused E2E now verifies the chronology save/reload round-trip. The full-restoration ending was not reached, and the independent human-playthrough/content-expansion gate remains open.
+**Status:** The latest cumulative agent-led fresh-origin run completed all four current collections and both chapter puzzles, but it is not independent human feedback. Its manual reload after the chronology puzzle was not verified; a later narrow CUA check manually verified persistence of a prepared chronology-complete fixture imported through Save & Restore, not a chapter playthrough. A separate focused E2E also verifies the chronology save/reload round-trip. The full-restoration ending was not reached, and the independent human-playthrough/content-expansion gate remains open.
 
 ## Environment
 
@@ -55,6 +55,13 @@
 - The run ended with 32 of 174 objects correctly filed (18%), all four authored collections restored, three research collections restored, three skill points, and the Chronology Wheel stage. It did not meet the 174-item full-restoration criteria and did not reach the final Engine ending.
 - Saved a manual snapshot to Slot 1 after solving the chronology. The manual CUA post-chronology reload check could not be completed: when a browser reload was invoked, the computer-use tool stopped before acting because it could not confirm the current browser URL. This manual check remains unverified. A separate focused E2E later verified that the completed chronology state survives reload; that automated result does not change what happened in this CUA session or count as human feedback.
 - The sound setting remained off, so this session did not assess listening quality.
+
+### Prepared chronology-state persistence spot check (agent-led CUA, 2026-11-05)
+
+- Opened a fresh Chrome Incognito origin at `http://127.0.0.1:5173` and used the visible Save & Restore import UI to load a normalized 174-item fixture with chronology complete.
+- Verified the interface showed 3/3 research collections, 18%, Chronology Wheel, Chronology of the Last Bell solved, and `Saved just now`.
+- Manually reloaded with the URL confirmed, then verified the same progress and saved status remained. After reload, opened Professor's Notebook and confirmed the **The Last Bell** entry persisted.
+- No manual-slot snapshot was used. This was an agent-led prepared-state persistence check, not an actual chapter playthrough or independent human feedback. The human-playtest and content-expansion gate remains open.
 
 ## Related automated evidence
 

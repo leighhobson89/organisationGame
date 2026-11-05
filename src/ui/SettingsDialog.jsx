@@ -96,6 +96,8 @@ export function SettingsDialog({ preferences, saveStatus, onChange, onPreviewSou
               <option value="1.125">112.5%</option>
               <option value="1.25">125%</option>
               <option value="1.5">150%</option>
+              <option value="1.75">175%</option>
+              <option value="2">200%</option>
             </select>
           </div>
 

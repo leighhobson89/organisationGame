@@ -278,6 +278,38 @@ test('worker errors preserve the previous valid autosave and report autosave una
   coordinator.dispose();
 });
 
+test('storage write failure preserves prior bytes, reports unavailable, and disables later writes', () => {
+  const previousRaw = encodeSave(createGameState(174, 20));
+  const { coordinator, worker, storage, timers, statuses } = createHarness({
+    initialEntries: { [AUTO_SAVE_KEY]: previousRaw },
+  });
+  const originalSetItem = storage.setItem.bind(storage);
+  let autoSaveWriteAttempts = 0;
+  storage.setItem = (key, value) => {
+    if (key === AUTO_SAVE_KEY) {
+      autoSaveWriteAttempts += 1;
+      throw new Error('storage quota exceeded');
+    }
+    originalSetItem(key, value);
+  };
+
+  coordinator.schedule(createGameState(174, 21));
+  timers.advance(450);
+  assert.equal(worker.messages.length, 1, 'the debounced state should reach the encoder');
+  assert.doesNotThrow(() => worker.respond(0), 'a storage write failure should be handled safely');
+
+  assert.equal(storage.getItem(AUTO_SAVE_KEY), previousRaw, 'a failed write must preserve the last valid autosave bytes');
+  assert.equal(autoSaveWriteAttempts, 1, 'the successful worker response should attempt one autosave write');
+  assert.ok(statuses.some((status) => /unavailable/i.test(status)), 'the player-facing status should report autosave unavailable');
+
+  coordinator.schedule(createGameState(174, 22));
+  timers.advance(1000);
+  assert.equal(worker.messages.length, 1, 'an unavailable coordinator should not send later states to the worker');
+  assert.equal(autoSaveWriteAttempts, 1, 'an unavailable coordinator should not retry storage writes');
+  assert.equal(storage.getItem(AUTO_SAVE_KEY), previousRaw, 'later schedules should leave the old autosave intact');
+  coordinator.dispose();
+});
+
 test('a synchronous postMessage error preserves the old save and reports unavailable', () => {
   const previousRaw = encodeSave(createGameState(174, 13));
   const { coordinator, worker, storage, timers, statuses } = createHarness({

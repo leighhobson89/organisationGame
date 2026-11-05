@@ -10,6 +10,7 @@ import { ItemFinder } from './ItemFinder.jsx';
 import { LabObject } from './LabObject.jsx';
 import { ScratchPad } from './ScratchPad.jsx';
 import { WorldAtlasPanel } from './WorldAtlasPanel.jsx';
+import { WorldGroundEngraving } from './WorldGroundEngraving.jsx';
 import { WorldOverviewCanvas } from './WorldOverviewCanvas.jsx';
 import { getResonanceLensMatches } from '../game/domain/skillHighlights.js';
 import { shouldShowCalibrationLead } from '../game/domain/firstActionLead.js';
@@ -159,9 +160,12 @@ export const WorldViewport = forwardRef(function WorldViewport({
   worldBounds,
   toastText = '',
   overlayRoot = null,
+  compactLargeTextGuidance = false,
 }, ref) {
   const viewportRef = useRef(null);
   const sceneRef = useRef(null);
+  const toolbarRef = useRef(null);
+  const toolbarCueHostRef = useRef(null);
   const findButtonRef = useRef(null);
   const selectionToggleButtonRef = useRef(null);
   const atlasToggleRef = useRef(null);
@@ -172,10 +176,16 @@ export const WorldViewport = forwardRef(function WorldViewport({
   const titleRevealRafRef = useRef(null);
   const [finderOpen, setFinderOpen] = useState(false);
   const [atlasOpen, setAtlasOpen] = useState(false);
+  const [jumpSelection, setJumpSelection] = useState('');
   const [atlasCamera, setAtlasCamera] = useState(camera ?? { panX: 0, panY: 0, scale: 0.8 });
   const [atlasCrosshair, setAtlasCrosshair] = useState(null);
   const [atlasStatus, setAtlasStatus] = useState('Use arrow keys to move the map crosshair. Press Enter to center.');
   const [zoomAnnouncement, setZoomAnnouncement] = useState('');
+  const [worldAnnouncement, setWorldAnnouncement] = useState('');
+  const [toolbarOverflow, setToolbarOverflow] = useState({ left: false, right: false });
+  const [devicePixelRatio, setDevicePixelRatio] = useState(() => (
+    typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1
+  ));
   const atlasOpenRef = useRef(false);
   const closeAtlasRef = useRef(null);
   const closeFinderRef = useRef(null);
@@ -183,7 +193,120 @@ export const WorldViewport = forwardRef(function WorldViewport({
   const previousPinchActiveRef = useRef(false);
   const lastAnnouncedZoomPercentRef = useRef(null);
   const zoomAnnouncementTimerRef = useRef(null);
+  const worldAnnouncementFrameRef = useRef(null);
   const renderModeRef = useRef('detail');
+
+  const announceWorldJump = useCallback((message) => {
+    if (!message) return;
+    if (worldAnnouncementFrameRef.current !== null) {
+      window.cancelAnimationFrame(worldAnnouncementFrameRef.current);
+    }
+    setWorldAnnouncement('');
+    worldAnnouncementFrameRef.current = window.requestAnimationFrame(() => {
+      worldAnnouncementFrameRef.current = null;
+      setWorldAnnouncement(message);
+    });
+  }, []);
+
+  const updateToolbarOverflow = useCallback(() => {
+    const toolbar = toolbarRef.current;
+    if (!toolbar) return;
+
+    const cueHost = toolbarCueHostRef.current;
+    if (cueHost) {
+      const toolbarRect = toolbar.getBoundingClientRect();
+      const cueHostRect = cueHost.getBoundingClientRect();
+      const cuePosition = {
+        '--toolbar-overflow-cue-y': `${toolbarRect.top + toolbarRect.height / 2 - cueHostRect.top}px`,
+        '--toolbar-overflow-cue-left': `${toolbarRect.left - cueHostRect.left - 6}px`,
+        '--toolbar-overflow-cue-right': `${toolbarRect.right - cueHostRect.left + 6}px`,
+      };
+      for (const [property, value] of Object.entries(cuePosition)) {
+        if (cueHost.style.getPropertyValue(property) !== value) {
+          cueHost.style.setProperty(property, value);
+        }
+      }
+    }
+
+    const maxScrollLeft = Math.max(0, toolbar.scrollWidth - toolbar.clientWidth);
+    const nextOverflow = {
+      left: toolbar.scrollLeft > 1,
+      right: maxScrollLeft - toolbar.scrollLeft > 1,
+    };
+    setToolbarOverflow((current) => (
+      current.left === nextOverflow.left && current.right === nextOverflow.right
+        ? current
+        : nextOverflow
+    ));
+  }, []);
+
+  const onToolbarWheel = useCallback((event) => {
+    if (event.deltaY === 0 || event.ctrlKey || event.target.closest?.('select, input, textarea')) return;
+
+    const toolbar = event.currentTarget;
+    const maxScrollLeft = toolbar.scrollWidth - toolbar.clientWidth;
+    if (maxScrollLeft <= 0) return;
+
+    const deltaModeScale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 40
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? 120
+        : 1;
+    const currentScrollLeft = toolbar.scrollLeft;
+    const nextScrollLeft = Math.max(
+      0,
+      Math.min(maxScrollLeft, currentScrollLeft + event.deltaY * deltaModeScale),
+    );
+    if (nextScrollLeft === currentScrollLeft) return;
+
+    event.preventDefault();
+    toolbar.scrollLeft = nextScrollLeft;
+  }, []);
+
+  useLayoutEffect(() => {
+    const toolbar = toolbarRef.current;
+    if (!toolbar) return undefined;
+
+    const resizeObserver = typeof ResizeObserver === 'function'
+      ? new ResizeObserver(updateToolbarOverflow)
+      : null;
+    const observeToolbarContent = () => {
+      if (!resizeObserver) return;
+      resizeObserver.observe(toolbar);
+      toolbar.querySelectorAll('*').forEach((element) => resizeObserver.observe(element));
+    };
+    const mutationObserver = typeof MutationObserver === 'function'
+      ? new MutationObserver(() => {
+        observeToolbarContent();
+        updateToolbarOverflow();
+      })
+      : null;
+
+    observeToolbarContent();
+    mutationObserver?.observe(toolbar, {
+      attributes: true,
+      attributeFilter: ['class', 'hidden', 'style'],
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+    toolbar.addEventListener('scroll', updateToolbarOverflow, { passive: true });
+    window.addEventListener('resize', updateToolbarOverflow);
+    updateToolbarOverflow();
+
+    return () => {
+      toolbar.removeEventListener('scroll', updateToolbarOverflow);
+      window.removeEventListener('resize', updateToolbarOverflow);
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+    };
+  }, [overlayRoot, updateToolbarOverflow]);
+
+  useEffect(() => {
+    const refreshDevicePixelRatio = () => setDevicePixelRatio(window.devicePixelRatio || 1);
+    window.addEventListener('resize', refreshDevicePixelRatio);
+    return () => window.removeEventListener('resize', refreshDevicePixelRatio);
+  }, []);
 
   const onCameraPreview = useCallback((nextCamera) => {
     if (atlasOpenRef.current) setAtlasCamera(nextCamera);
@@ -332,6 +455,13 @@ export const WorldViewport = forwardRef(function WorldViewport({
     return () => rootObserver.disconnect();
   }, [scheduleTitleRevealPosition]);
 
+  useEffect(() => () => {
+    if (worldAnnouncementFrameRef.current !== null) {
+      window.cancelAnimationFrame(worldAnnouncementFrameRef.current);
+      worldAnnouncementFrameRef.current = null;
+    }
+  }, []);
+
   const destinationCounts = useMemo(() => {
     const counts = new Map(destinations.map((destination) => [destination.id, 0]));
     for (const item of items) {
@@ -372,13 +502,14 @@ export const WorldViewport = forwardRef(function WorldViewport({
       }
       return false;
     },
-    focusDestination(destination, preferredScale = cameraRef.current.scale, { fitToViewport = false } = {}) {
+    focusDestination(destination, preferredScale = cameraRef.current.scale, { fitToViewport = false, announce = false } = {}) {
       if (destination?.position) {
         const fittedScale = fitTargetScale(destination, preferredScale);
         const scale = !fitToViewport && destination.id === 'cabinet-calibration'
           ? Math.min(0.5, fittedScale)
           : fittedScale;
         focusWorldPoint({ x: destination.position.x + (destination.width ?? 250) / 2, y: destination.position.y + (destination.height ?? 170) / 2 }, scale);
+        if (announce) announceWorldJump(`Centered on ${destination.label}.`);
       }
     },
     focusScratchPad(pad, preferredScale = cameraRef.current.scale) {
@@ -393,7 +524,7 @@ export const WorldViewport = forwardRef(function WorldViewport({
     reset() {
       focusStartingView();
     },
-  }), [fitTargetScale, focusStartingView, focusWorldPoint]);
+  }), [announceWorldJump, fitTargetScale, focusStartingView, focusWorldPoint]);
 
   const renderMode = getRenderMode({
     currentMode: renderModeRef.current,
@@ -696,11 +827,11 @@ export const WorldViewport = forwardRef(function WorldViewport({
   const jumpTo = (value) => {
     if (value === 'start') {
       focusStartingView();
-      return;
+      return 'Centered on the Starting area.';
     }
     if (value === 'engine') {
       focusWorldPoint({ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }, fitTargetScale(invention, 1));
-      return;
+      return 'Centered on the Palimpsest Engine.';
     }
     const [kind, id] = value.split(':');
     if (kind === 'collection') {
@@ -710,17 +841,34 @@ export const WorldViewport = forwardRef(function WorldViewport({
           x: item.position.x + (item.width ?? 0) / 2,
           y: item.position.y + (item.height ?? 0) / 2,
         }, Math.max(0.72, cameraRef.current.scale));
+        const collection = collections.find((entry) => entry.id === id);
+        return `Centered on ${collection?.label ?? 'the collection'}: ${item.title ?? 'the first unfinished item'}.`;
       }
-      return;
+      return null;
     }
     if (kind === 'destination') {
       const destination = destinations.find((entry) => entry.id === id);
-      if (destination) focusWorldPoint({ x: destination.position.x + destination.width / 2, y: destination.position.y + destination.height / 2 }, fitTargetScale(destination, 0.76));
+      if (destination) {
+        focusWorldPoint({ x: destination.position.x + destination.width / 2, y: destination.position.y + destination.height / 2 }, fitTargetScale(destination, 0.76));
+        return `Centered on ${destination.label}.`;
+      }
+      return null;
     }
     if (kind === 'scratchpad') {
       const pad = scratchPads.find((entry) => entry.id === id);
-      if (pad) focusWorldPoint({ x: pad.position.x + pad.width / 2, y: pad.position.y + pad.height / 2 }, fitTargetScale(pad, 0.72));
+      if (pad) {
+        focusWorldPoint({ x: pad.position.x + pad.width / 2, y: pad.position.y + pad.height / 2 }, fitTargetScale(pad, 0.72));
+        return `Centered on ${pad.label}.`;
+      }
     }
+    return null;
+  };
+
+  const handleWorldJumpChange = (event) => {
+    const value = event.currentTarget.value;
+    if (!value) return;
+    announceWorldJump(jumpTo(value));
+    setJumpSelection('');
   };
 
   const atlasToggle = (
@@ -736,6 +884,17 @@ export const WorldViewport = forwardRef(function WorldViewport({
     >
       Atlas
     </button>
+  );
+
+  const standardControlsGuidance = (
+    <>
+      <span className="world-hint__controls">
+        Drag objects to a cabinet or workbench ·{' '}
+        <span className="world-hint__mouse-guidance">drag empty space to pan · wheel to zoom</span>
+        <span className="world-hint__touch-guidance">drag empty space to pan · pinch to zoom</span>
+      </span>
+      <span className="world-hint__keyboard-guidance"> · Use arrow keys to pan</span>
+    </>
   );
 
   return (
@@ -774,12 +933,16 @@ export const WorldViewport = forwardRef(function WorldViewport({
       }}
     >
       <div className="world-scene" ref={sceneRef} style={{ transform: `translate(${cullingCamera.panX}px, ${cullingCamera.panY}px) scale(${cullingCamera.scale})`, transformOrigin: '0 0', width: bounds.width, height: bounds.height, '--inverse-camera-scale': String(1 / cullingCamera.scale) }}>
-        <div className="world-ground" aria-hidden="true" style={{ position: 'absolute', left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height, pointerEvents: 'none' }} />
+        <div className="world-ground" aria-hidden="true" style={{ position: 'absolute', left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height, pointerEvents: 'none' }}>
+          <WorldGroundEngraving />
+        </div>
         <WorldOverviewCanvas
           items={items}
           width={bounds.width}
           height={bounds.height}
           visible={renderMode === 'overview'}
+          cameraScale={cullingCamera.scale}
+          devicePixelRatio={devicePixelRatio}
           excludedItemIds={overviewExcludedItemIds}
           highlightedItemIds={overviewHighlightedItemIdSet}
         />
@@ -804,7 +967,7 @@ export const WorldViewport = forwardRef(function WorldViewport({
         })}
         {showInvention && (
           <div className="invention-anchor" style={{ left: inventionCenter.x, top: inventionCenter.y }}>
-            <InventionCore stage={inventionStage} completedCollections={completeIds.length} solvedPuzzles={(progress?.solvedPuzzleIds ?? []).length} />
+            <InventionCore stage={inventionStage} completedCollections={completeIds.length} solvedPuzzles={(progress?.solvedPuzzleIds ?? []).length} cameraScale={cullingCamera.scale} />
           </div>
         )}
         {renderedItems.map((item) => {
@@ -875,7 +1038,7 @@ export const WorldViewport = forwardRef(function WorldViewport({
         />
       )}
       <div className="sr-only" role="status" aria-live="polite" data-testid="zoom-announcer">{zoomAnnouncement}</div>
-      <div className="sr-only" aria-live="polite" data-testid="world-announcer" />
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="world-announcer">{worldAnnouncement}</div>
     </section>
     {finderOpen && overlayRoot && createPortal(
       <ItemFinder items={items} onSelectItem={selectFinderItem} onClose={closeFinder} />,
@@ -883,48 +1046,66 @@ export const WorldViewport = forwardRef(function WorldViewport({
     )}
     {overlayRoot && createPortal(atlasToggle, overlayRoot)}
     {overlayRoot && createPortal(
-      <div className="world-bottom-stack">
-        <p className="world-hint">{multiSelectionMode
+      <div ref={toolbarCueHostRef} className="world-bottom-stack">
+        {multiSelectionMode
           ? <>
+            <p className="world-hint">
             <span className="world-hint__mouse-selection">Click or press Enter on objects to select them</span>
             <span className="world-hint__touch-selection">Tap or press Enter on objects to select them</span>
             {' '}· use the Inspector to move the group ·{' '}
             <span className="world-hint__mouse-guidance">drag empty space to pan · wheel to zoom</span>
             <span className="world-hint__touch-guidance">drag empty space to pan · pinch to zoom</span>
+            </p>
           </>
-          : <>
+          : compactLargeTextGuidance && showCalibrationLead ? (
+            <aside className="world-hint">
+              <span className="world-hint__lead">Start with Harmonic Calibration: select a blueprint to inspect its clue, then file it in the Harmonic Calibration Folio.</span>
+              <details className="world-hint__details">
+                <summary>Controls and keyboard help</summary>
+                <div className="world-hint__details-copy">{standardControlsGuidance}</div>
+              </details>
+            </aside>
+          ) : (
+            <p className="world-hint">
             {showCalibrationLead && <span className="world-hint__lead">Start with Harmonic Calibration: select a blueprint to inspect its clue, then file it in the Harmonic Calibration Folio.</span>}
-            <span className="world-hint__controls">
-              Drag objects to a cabinet or workbench ·{' '}
-              <span className="world-hint__mouse-guidance">drag empty space to pan · wheel to zoom</span>
-              <span className="world-hint__touch-guidance">drag empty space to pan · pinch to zoom</span>
-            </span>
-          </>}</p>
+              {standardControlsGuidance}
+            </p>
+          )}
         <div className="lab-toast" aria-live="polite" role="status" data-testid="game-feedback">{toastText}</div>
-        <div className="game-toolbar" role="group" aria-label="World navigation controls" onFocus={(event) => {
-          const toolbar = event.currentTarget;
-          const focusedControl = event.target;
-          const toolbarRect = toolbar.getBoundingClientRect();
-          const focusedRect = focusedControl instanceof HTMLElement
-            ? focusedControl.getBoundingClientRect()
-            : null;
-          const clippedByToolbar = focusedRect
-            && (focusedRect.left < toolbarRect.left - 1 || focusedRect.right > toolbarRect.right + 1);
-          const clippedByViewport = focusedRect
-            && (focusedRect.left < -1 || focusedRect.right > window.innerWidth + 1);
-          if (
-            toolbar.scrollWidth > toolbar.clientWidth + 1
-            && focusedControl instanceof HTMLElement
-            && (clippedByToolbar || clippedByViewport)
-          ) {
-            focusedControl.scrollIntoView({ block: 'nearest', inline: 'center' });
-          }
-        }}>
+        <div
+          ref={toolbarRef}
+          className="game-toolbar"
+          role="group"
+          aria-label="World navigation controls"
+          data-overflow-left={toolbarOverflow.left ? 'true' : 'false'}
+          data-overflow-right={toolbarOverflow.right ? 'true' : 'false'}
+          onWheel={onToolbarWheel}
+          onFocus={(event) => {
+            const toolbar = event.currentTarget;
+            const focusedControl = event.target;
+            const toolbarRect = toolbar.getBoundingClientRect();
+            const focusedRect = focusedControl instanceof HTMLElement
+              ? focusedControl.getBoundingClientRect()
+              : null;
+            const clippedByToolbar = focusedRect
+              && (focusedRect.left < toolbarRect.left - 1 || focusedRect.right > toolbarRect.right + 1);
+            const clippedByViewport = focusedRect
+              && (focusedRect.left < -1 || focusedRect.right > window.innerWidth + 1);
+            if (
+              toolbar.scrollWidth > toolbar.clientWidth + 1
+              && focusedControl instanceof HTMLElement
+              && (clippedByToolbar || clippedByViewport)
+            ) {
+              focusedControl.scrollIntoView({ block: 'nearest', inline: 'center' });
+            }
+          }}
+        >
           <button className="hud-control" type="button" aria-label="Zoom out" title="Zoom out" onClick={() => zoomBy(0.84)}>−</button>
           <span className="zoom-readout">{Math.round(cullingCamera.scale * 100)}%</span>
           <button className="hud-control" type="button" aria-label="Zoom in" title="Zoom in" onClick={() => zoomBy(1.18)}>+</button>
           <label className="sr-only" htmlFor="world-jump">Jump to laboratory location</label>
-          <select className="hud-control world-jump" id="world-jump" data-testid="world-jump" defaultValue="start" onChange={(event) => jumpTo(event.target.value)}>
+          <select className="hud-control world-jump" id="world-jump" data-testid="world-jump" value={jumpSelection} onChange={handleWorldJumpChange}>
+            <option value="" disabled>Jump to location</option>
             <option value="start">Starting area</option>
             <option value="engine">Palimpsest Engine</option>
             {destinations.map((destination) => <option key={destination.id} value={`destination:${destination.id}`}>{destination.label}</option>)}
@@ -963,6 +1144,12 @@ export const WorldViewport = forwardRef(function WorldViewport({
           {(multiSelectionMode || selectedItemIds.length > 0) && <span className="world-count" data-testid="multi-selection-count" aria-live="polite">{selectedItemIds.length} selected</span>}
           <span className="world-count" data-testid="world-item-count" aria-label={`${itemCount} laboratory objects`}>{itemCount} objects</span>
         </div>
+        {toolbarOverflow.left && (
+          <span className="game-toolbar-overflow-cue game-toolbar-overflow-cue--left" aria-hidden="true">‹</span>
+        )}
+        {toolbarOverflow.right && (
+          <span className="game-toolbar-overflow-cue game-toolbar-overflow-cue--right" aria-hidden="true">›</span>
+        )}
       </div>,
       overlayRoot,
     )}

@@ -95,6 +95,25 @@ async function expectFocusedActionVisible(panel, action) {
   expect(visibility.hitTestable, 'focused skill action should be hit-testable at its center').toBe(true);
 }
 
+async function expectFocusedHeaderControlReachable(control, description) {
+  await expect(control).toBeFocused();
+  const visibility = await control.evaluate((target) => {
+    const rect = target.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return {
+      fullyVisible: rect.left >= -1 && rect.right <= window.innerWidth + 1
+        && rect.top >= -1 && rect.bottom <= window.innerHeight + 1,
+      hitTestable: hit === target || target.contains(hit),
+      targetBounds: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+      viewportBounds: { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight },
+      hitTarget: hit ? { tagName: hit.tagName, id: hit.id, className: String(hit.className) } : null,
+    };
+  });
+
+  expect(visibility.fullyVisible, `${description} should remain fully visible in the viewport: ${JSON.stringify(visibility)}`).toBe(true);
+  expect(visibility.hitTestable, `${description} should be hit-testable at its center: ${JSON.stringify(visibility)}`).toBe(true);
+}
+
 async function expectSkillsPanelFits(panel, viewport) {
   const layout = await panel.evaluate((element) => {
     const rect = element.getBoundingClientRect();
@@ -110,7 +129,7 @@ async function expectSkillsPanelFits(panel, viewport) {
   expect(layout.panelInViewport, `skills panel should fit ${viewport.width}x${viewport.height}`).toBe(true);
   expect(layout.panelHasHorizontalOverflow, 'skill content should not overflow horizontally').toBe(false);
   expect(layout.pageHasHorizontalOverflow, 'page should not overflow horizontally').toBe(false);
-  expect(layout.panelScrollsVertically, 'skills panel should scroll internally at 150%').toBe(true);
+  expect(layout.panelScrollsVertically, 'skills panel should scroll internally').toBe(true);
 }
 
 async function expectCompactSkillsHeaderFits(panel) {
@@ -130,12 +149,16 @@ async function expectCompactSkillsHeaderFits(panel) {
         && headingRect.top >= panelTop && headingRect.bottom <= panelBottom,
       pointsInsidePanel: pointsRect.left >= panelLeft && pointsRect.right <= panelRight
         && pointsRect.top >= panelTop && pointsRect.bottom <= panelBottom,
+      headingBounds: { left: headingRect.left, top: headingRect.top, right: headingRect.right, bottom: headingRect.bottom },
+      pointsBounds: { left: pointsRect.left, top: pointsRect.top, right: pointsRect.right, bottom: pointsRect.bottom },
+      panelVisibleClientBounds: { left: panelLeft, top: panelTop, right: panelRight, bottom: panelBottom },
+      viewportBounds: { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight },
     };
   });
 
   expect(layout.toolbarGap, 'compact skills panel should end at least 8px above the toolbar').toBeGreaterThanOrEqual(8);
-  expect(layout.headingInsidePanel, 'Workshop Skills heading should fit inside the visible panel client bounds').toBe(true);
-  expect(layout.pointsInsidePanel, 'insight points badge should fit inside the visible panel client bounds').toBe(true);
+  expect(layout.headingInsidePanel, `Workshop Skills heading should fit inside the visible panel client bounds: ${JSON.stringify(layout)}`).toBe(true);
+  expect(layout.pointsInsidePanel, `insight points badge should fit inside the visible panel client bounds: ${JSON.stringify(layout)}`).toBe(true);
 }
 
 for (const viewport of [{ width: 390, height: 480 }, { width: 1280, height: 720 }]) {
@@ -233,3 +256,74 @@ for (const viewport of [
       .toBeGreaterThan(panelScrollTopBeforeTraversal);
   });
 }
+
+test('200% text scale keeps skill purchases and feedback reachable at 320x360', async ({ page }) => {
+  const viewport = { width: 320, height: 360 };
+  await page.setViewportSize(viewport);
+  await seedGame(page, { textScale: 2 });
+  await expect(page.locator('html')).toHaveCSS('--text-scale', '2');
+  await page.getByTestId('toggle-skills').click();
+
+  const panel = page.getByTestId('skills-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole('heading', { name: 'Workshop Skills' })).toBeVisible();
+  await expectSkillsPanelFits(panel, viewport);
+  await expectCompactSkillsHeaderFits(panel);
+
+  const panelScrollTopBeforeTraversal = await panel.evaluate((element) => element.scrollTop);
+  await page.getByTestId('toggle-notebook').focus();
+  await page.keyboard.press('Tab');
+  const toggleSkills = page.getByTestId('toggle-skills');
+  await expect(toggleSkills).toBeFocused();
+  await expectFocusedHeaderControlReachable(toggleSkills, 'Skills header control');
+  await page.keyboard.press('Tab');
+  const openSaves = page.getByTestId('open-saves');
+  await expect(openSaves).toBeFocused();
+  await expectFocusedHeaderControlReachable(openSaves, 'Save & Restore header control');
+  await page.keyboard.press('Tab');
+  const openSettings = page.getByTestId('open-settings');
+  await expect(openSettings).toBeFocused();
+  await expectFocusedHeaderControlReachable(openSettings, 'Settings header control');
+  await page.keyboard.press('Tab');
+
+  const firstPurchase = page.getByTestId(`purchase-${skills[0].id}`);
+  await expectFocusedActionVisible(panel, firstPurchase);
+  for (const [index, skill] of skills.entries()) {
+    const card = page.getByTestId(`skill-${skill.id}`);
+    const purchase = card.getByTestId(`purchase-${skill.id}`);
+    await expect(purchase).toBeFocused();
+    await expect(purchase).toBeEnabled();
+    await expect(purchase).toHaveAccessibleName(skill.purchaseName);
+    await expectFullContentWidth(purchase, card, `${skill.id} purchase action at 200%`);
+    await expectFocusedActionVisible(panel, purchase);
+    await page.keyboard.press('Enter');
+
+    if (skill.passive) {
+      const status = card.locator('.skill-selection-hint');
+      await expect(status).toBeVisible();
+      await expect(status).toHaveAttribute('role', 'status');
+      await expectFullContentWidth(status, card, `${skill.id} installed status at 200%`);
+      continue;
+    }
+
+    const activation = card.getByTestId(`toggle-${skill.id}`);
+    await expect(activation).toBeVisible();
+    await expect(activation).toHaveAccessibleName(skill.activationName);
+    await expect(activation).toHaveAttribute('aria-pressed', 'false');
+    await expect(activation).toBeDisabled();
+    await expectFullContentWidth(activation, card, `${skill.id} activation action at 200%`);
+
+    const hint = card.locator('.skill-selection-hint');
+    await expect(hint).toBeVisible();
+    await expectFullContentWidth(hint, card, `${skill.id} selection hint at 200%`);
+
+    if (index < skills.length - 1) {
+      await page.keyboard.press('Tab');
+      await expectFocusedActionVisible(panel, page.getByTestId(`purchase-${skills[index + 1].id}`));
+    }
+  }
+
+  const panelScrollTopAfterTraversal = await panel.evaluate((element) => element.scrollTop);
+  expect(panelScrollTopAfterTraversal, 'Tab traversal should scroll the skill panel to lower actions')
+    .toBeGreaterThan(panelScrollTopBeforeTraversal);
+});

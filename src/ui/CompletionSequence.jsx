@@ -24,7 +24,12 @@ function useReducedMotionPreference(userReducedMotion) {
   return Boolean(userReducedMotion || osReducedMotion);
 }
 
-export function CompletionSequence({ stats, onContinue, userReducedMotion = false }) {
+export function CompletionSequence({
+  stats,
+  onContinue,
+  onReturnFocusFallback,
+  userReducedMotion = false,
+}) {
   const headingRef = useRef(null);
   const prefersReducedMotion = useReducedMotionPreference(userReducedMotion);
 
@@ -42,9 +47,15 @@ export function CompletionSequence({ stats, onContinue, userReducedMotion = fals
     return () => {
       window.cancelAnimationFrame(focusFrame);
       window.removeEventListener('keydown', onKeyDown);
-      if (previousFocus?.isConnected) previousFocus.focus();
+      const isDocumentFallback = previousFocus === document.body
+        || previousFocus === document.documentElement;
+      if (!isDocumentFallback && previousFocus?.isConnected && typeof previousFocus.focus === 'function') {
+        previousFocus.focus();
+        if (document.activeElement === previousFocus) return;
+      }
+      onReturnFocusFallback?.();
     };
-  }, []);
+  }, [onReturnFocusFallback]);
 
   return (
     <div className={`completion-sequence${prefersReducedMotion ? ' completion-sequence--reduced-motion' : ''}`} data-testid="completion-sequence" data-motion={prefersReducedMotion ? 'reduced' : 'full'}>
@@ -53,6 +64,9 @@ export function CompletionSequence({ stats, onContinue, userReducedMotion = fals
           <span className="completion-sequence__projection-ring completion-sequence__projection-ring--outer" />
           <span className="completion-sequence__projection-ring completion-sequence__projection-ring--middle" />
           <span className="completion-sequence__projection-ring completion-sequence__projection-ring--inner" />
+          <svg className="completion-sequence__projection-trace" viewBox="0 0 280 280" focusable="false" aria-hidden="true">
+            <path pathLength="1" d="M38 151 C52 128 65 116 81 118 C99 120 103 144 121 146 C142 148 150 121 165 108 C181 94 201 98 215 117 C231 139 235 161 221 174 C207 187 189 171 177 159 C164 146 150 148 137 162 C123 177 114 195 96 198 C73 202 52 181 38 151 Z" />
+          </svg>
           <span className="completion-sequence__projection-core">✧</span>
         </div>
         <div className="completion-sequence__content">
@@ -62,7 +76,7 @@ export function CompletionSequence({ stats, onContinue, userReducedMotion = fals
             The Engine reads residual impressions from objects and reconstructs them as a luminous spatial replay. It replayed an impression left by the Chaos Event: the Engine was a witness, not its cause. Professor and Elian were witnesses as well.
           </p>
           <p className="completion-sequence__narrative">
-            The unsent apology says the Professor feared Elian would blame the machine for a choice he made. The recovered records do not name that choice or establish whether that choice was connected to the Chaos Event.
+            Unsent Apology: the Professor feared Elian would blame the machine for his choice. Clearest reading of his choice: he followed the first stable impression via the eastward survey to the sealed bell chamber. Records do not directly name that choice or establish whether it caused the Chaos Event.
           </p>
           <p className="completion-sequence__uncertainty">
             The recovered records do not establish what began the Chaos Event, and they leave Elian's response unresolved.

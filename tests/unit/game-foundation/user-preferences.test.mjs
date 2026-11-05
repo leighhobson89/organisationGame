@@ -35,7 +35,7 @@ test('normalization keeps only supported text scales and a boolean motion prefer
     reduceMotion: false,
     soundEffectsEnabled: true,
   });
-  assert.deepEqual(normalizePreferences({ textScale: 2, reduceMotion: 'yes', extra: true }), preferenceDefaults);
+  assert.deepEqual(normalizePreferences({ textScale: 2.125, reduceMotion: 'yes', extra: true }), preferenceDefaults);
   assert.deepEqual(normalizePreferences(null), preferenceDefaults);
   assert.deepEqual(normalizePreferences({ textScale: 1.125, reduceMotion: true, soundEffectsEnabled: 'yes' }), {
     textScale: 1.125,
@@ -56,6 +56,21 @@ test('150% text scale is supported by the existing version 1 preference envelope
   });
   assert.deepEqual(loadPreferences(storage), preference);
 });
+
+for (const textScale of [1.75, 2]) {
+  test(`${textScale * 100}% text scale normalizes, saves, and loads in the version 1 preference envelope`, () => {
+    const storage = createStorage();
+    const preference = { textScale, reduceMotion: true, soundEffectsEnabled: false };
+
+    assert.deepEqual(normalizePreferences({ version: 1, ...preference }), preference);
+    assert.equal(savePreferences(preference, storage), true);
+    assert.deepEqual(JSON.parse(storage.read(PREFERENCES_STORAGE_KEY)), {
+      version: 1,
+      ...preference,
+    });
+    assert.deepEqual(loadPreferences(storage), preference);
+  });
+}
 
 test('normalization rejects an unknown version when version metadata is present', () => {
   assert.deepEqual(normalizePreferences({ version: 1, textScale: 1.25, reduceMotion: true }), {

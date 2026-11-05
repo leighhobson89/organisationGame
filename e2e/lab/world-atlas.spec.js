@@ -356,6 +356,161 @@ test('World atlas stays accessible at 320x360 with 150% text and preserves keybo
   expectCameraClose(await readSceneCamera(page), cameraAfterRecenter);
 });
 
+test('World atlas stays accessible at 320x360 with 200% text and preserves keyboard camera behavior', async ({ page }) => {
+  const viewport = { width: 320, height: 360 };
+  await page.setViewportSize(viewport);
+  await loadAtlasFixture(page, { textScale: 2 });
+  await expect(page.locator('html')).toHaveCSS('--text-scale', '2');
+
+  const { toggle, panel } = await openAtlas(page);
+  const heading = panel.getByRole('heading', { name: 'Clockwork Atlas' });
+  const description = panel.locator('.world-atlas-heading p');
+  const instructions = panel.locator('.world-atlas-instructions');
+  const close = panel.getByRole('button', { name: 'Close Clockwork Atlas' });
+  const map = page.getByRole('group', { name: /Laboratory map/ });
+  const announcer = page.getByTestId('world-atlas-announcer');
+  await expect(page.getByRole('region', { name: 'Clockwork Atlas' })).toBeVisible();
+  await expect(panel.locator('.world-atlas-header')).toBeVisible();
+  await expect(heading).toBeVisible();
+  await expect(description).toBeVisible();
+  await expect(close).toBeVisible();
+  await expect(map).toBeVisible();
+  await expect(instructions).toBeVisible();
+  await expect(announcer).toBeVisible();
+  await expect(announcer).toHaveAttribute('role', 'status');
+  await expect(announcer).toHaveAttribute('aria-live', 'polite');
+  await expectInsideViewport(panel, viewport.width, viewport.height, 'atlas panel at 320x360');
+
+  const panelGeometry = await panel.evaluate((element, selectors) => {
+    const rect = (target) => {
+      const bounds = target.getBoundingClientRect();
+      return { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom };
+    };
+    const panelRect = rect(element);
+    const headingRect = rect(element.querySelector(selectors.heading));
+    const headingTitleRect = rect(element.querySelector(selectors.headingTitle));
+    const headingDescriptionRect = rect(element.querySelector(selectors.headingDescription));
+    const closeRect = rect(element.querySelector(selectors.close));
+    const instructionsRect = rect(element.querySelector(selectors.instructions));
+    const toolbar = document.querySelector('.game-toolbar');
+    const toolbarRect = rect(toolbar);
+    const toolbarStyle = getComputedStyle(toolbar);
+    const overlaps = (first, second) => first.left < second.right && first.right > second.left
+      && first.top < second.bottom && first.bottom > second.top;
+    const centerX = closeRect.left + (closeRect.right - closeRect.left) / 2;
+    const centerY = closeRect.top + (closeRect.bottom - closeRect.top) / 2;
+    const hit = document.elementFromPoint(centerX, centerY);
+
+    return {
+      panelRect,
+      panelHasHorizontalOverflow: element.scrollWidth > element.clientWidth + 1,
+      pageHasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth,
+      headingRect,
+      headingTitleRect,
+      headingDescriptionRect,
+      closeRect,
+      instructionsRect,
+      headingAndInstructionsOverlap: overlaps(headingRect, instructionsRect),
+      headingTextAndCloseOverlap: overlaps(headingTitleRect, closeRect)
+        || overlaps(headingDescriptionRect, closeRect),
+      closeInsidePanel: closeRect.left >= panelRect.left && closeRect.right <= panelRect.right
+        && closeRect.top >= panelRect.top && closeRect.bottom <= panelRect.bottom,
+      closeInsideViewport: closeRect.left >= 0 && closeRect.right <= window.innerWidth
+        && closeRect.top >= 0 && closeRect.bottom <= window.innerHeight,
+      closeCenterHitTestable: hit === element.querySelector(selectors.close)
+        || element.querySelector(selectors.close).contains(hit),
+      toolbarRect,
+      panelToolbarClearance: toolbarRect.top - panelRect.bottom,
+      panelOverlapsToolbar: overlaps(panelRect, toolbarRect),
+      toolbarInsideViewport: toolbarRect.left >= 0 && toolbarRect.right <= window.innerWidth
+        && toolbarRect.top >= 0 && toolbarRect.bottom <= window.innerHeight,
+      toolbarHeight: toolbarRect.bottom - toolbarRect.top,
+      toolbarOverflowX: toolbarStyle.overflowX,
+      toolbarScrollWidth: toolbar.scrollWidth,
+      toolbarClientWidth: toolbar.clientWidth,
+    };
+  }, {
+    heading: '.world-atlas-heading',
+    headingTitle: '.world-atlas-heading h2',
+    headingDescription: '.world-atlas-heading p',
+    instructions: '.world-atlas-instructions',
+    close: '.world-atlas-close',
+  });
+  expect.soft(panelGeometry.panelHasHorizontalOverflow, `Atlas panel should not overflow horizontally: ${JSON.stringify(panelGeometry)}`).toBe(false);
+  expect.soft(panelGeometry.pageHasHorizontalOverflow, `page should not overflow horizontally: ${JSON.stringify(panelGeometry)}`).toBe(false);
+  expect.soft(panelGeometry.headingAndInstructionsOverlap, `Atlas heading and instructions should not collide: ${JSON.stringify(panelGeometry)}`).toBe(false);
+  expect.soft(panelGeometry.headingTextAndCloseOverlap, `Atlas heading text should not collide with Close: ${JSON.stringify(panelGeometry)}`).toBe(false);
+  expect.soft(panelGeometry.closeInsidePanel, `Close should remain fully inside the Atlas panel: ${JSON.stringify(panelGeometry)}`).toBe(true);
+  expect.soft(panelGeometry.closeInsideViewport, `Close should remain fully inside the viewport: ${JSON.stringify(panelGeometry)}`).toBe(true);
+  expect.soft(panelGeometry.closeCenterHitTestable, `Close should remain hit-testable at its center: ${JSON.stringify(panelGeometry)}`).toBe(true);
+  expect.soft(panelGeometry.panelToolbarClearance, `Atlas should retain at least 10px clearance above the toolbar: ${JSON.stringify(panelGeometry)}`)
+    .toBeGreaterThanOrEqual(10);
+  expect.soft(panelGeometry.panelOverlapsToolbar, `Atlas panel should not overlap the toolbar: ${JSON.stringify(panelGeometry)}`).toBe(false);
+  expect.soft(panelGeometry.toolbarInsideViewport, `Compact toolbar should stay inside the viewport: ${JSON.stringify(panelGeometry)}`).toBe(true);
+  expect.soft(panelGeometry.toolbarHeight, `Compact toolbar should fit in a 44–48px rail: ${JSON.stringify(panelGeometry)}`).toBeGreaterThanOrEqual(44);
+  expect.soft(panelGeometry.toolbarHeight, `Compact toolbar should fit in a 44–48px rail: ${JSON.stringify(panelGeometry)}`).toBeLessThanOrEqual(48);
+  expect.soft(['auto', 'scroll'].includes(panelGeometry.toolbarOverflowX), `Compact toolbar should scroll horizontally: ${JSON.stringify(panelGeometry)}`).toBe(true);
+  expect.soft(panelGeometry.toolbarScrollWidth, `Compact toolbar controls should overflow their rail: ${JSON.stringify(panelGeometry)}`)
+    .toBeGreaterThan(panelGeometry.toolbarClientWidth);
+
+  const toolbar = page.getByRole('group', { name: 'World navigation controls' });
+  const toolbarControls = toolbar.locator('button:not([disabled]), select:not([disabled]), input:not([disabled])');
+  const toolbarControlCount = await toolbarControls.count();
+  expect(toolbarControlCount, 'compact toolbar should retain keyboard-reachable controls').toBeGreaterThan(0);
+  await toolbarControls.first().focus();
+  for (let index = 0; index < toolbarControlCount; index += 1) {
+    const control = toolbarControls.nth(index);
+    await expect(control, `compact toolbar control ${index + 1} should be keyboard reachable`).toBeFocused();
+    const controlLayout = await control.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const toolbarElement = element.closest('.game-toolbar');
+      const toolbarRect = toolbarElement.getBoundingClientRect();
+      const left = toolbarRect.left + toolbarElement.clientLeft;
+      const top = toolbarRect.top + toolbarElement.clientTop;
+      const right = left + toolbarElement.clientWidth;
+      const bottom = top + toolbarElement.clientHeight;
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return {
+        withinToolbar: rect.left >= left - 1 && rect.right <= right + 1
+          && rect.top >= top - 1 && rect.bottom <= bottom + 1,
+        withinViewport: rect.left >= 0 && rect.right <= window.innerWidth
+          && rect.top >= 0 && rect.bottom <= window.innerHeight,
+        centerHitTestable: hit === element || element.contains(hit),
+      };
+    });
+    expect.soft(controlLayout.withinToolbar, `compact toolbar control ${index + 1} should be visible in the rail: ${JSON.stringify(controlLayout)}`).toBe(true);
+    expect.soft(controlLayout.withinViewport, `compact toolbar control ${index + 1} should remain in the viewport: ${JSON.stringify(controlLayout)}`).toBe(true);
+    expect.soft(controlLayout.centerHitTestable, `compact toolbar control ${index + 1} should be hit-testable: ${JSON.stringify(controlLayout)}`).toBe(true);
+    if (index < toolbarControlCount - 1) await page.keyboard.press('Tab');
+  }
+
+  await map.focus();
+  const cameraBefore = await readSceneCamera(page);
+  const outlineBefore = await readOutlineSignature(page);
+  await page.keyboard.press('ArrowRight');
+  await expect(announcer).toContainText(/Map crosshair moved near .+; 50% zoom\./);
+  await expect(map, 'ArrowRight should keep keyboard focus on the map group').toBeFocused();
+  const announcement = await announcer.textContent();
+  const landmarkLabels = await panel.locator('.world-atlas-landmark').evaluateAll((landmarks) =>
+    landmarks.map((landmark) => landmark.getAttribute('aria-label')));
+  expect(landmarkLabels.some((label) => label && announcement.includes(label)),
+    `ArrowRight should announce the nearby landmark: ${announcement}`).toBe(true);
+
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await readSceneCamera(page)).panX).not.toBe(cameraBefore.panX);
+  const cameraAfterRecenter = await readSceneCamera(page);
+  expect(cameraAfterRecenter.scale).toBeCloseTo(cameraBefore.scale, 5);
+  await expect.poll(async () => JSON.stringify(await readOutlineSignature(page)))
+    .not.toBe(JSON.stringify(outlineBefore));
+
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveCount(0);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute('data-testid')))
+    .toBe('world-atlas-toggle');
+  expectCameraClose(await readSceneCamera(page), cameraAfterRecenter);
+});
+
 test('World atlas leaves existing world-jump and item-Finder routes available', async ({ page }) => {
   const fixture = await loadAtlasFixture(page);
   const { toggle } = await openAtlas(page);

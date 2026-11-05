@@ -38,7 +38,7 @@ function createChronologyFixture() {
   return encodeSave(normalizeGameState(state));
 }
 
-async function seedChronology(page) {
+async function seedChronology(page, textScale = 1.5) {
   await page.addInitScript(({ saveKey, saveValue, preferencesKey, preferencesValue }) => {
     window.localStorage.setItem(saveKey, saveValue);
     window.localStorage.setItem(preferencesKey, preferencesValue);
@@ -48,14 +48,14 @@ async function seedChronology(page) {
     preferencesKey: PREFERENCES_STORAGE_KEY,
     preferencesValue: JSON.stringify({
       version: 1,
-      textScale: 1.5,
+      textScale,
       reduceMotion: false,
       soundEffectsEnabled: false,
     }),
   });
 
   await page.goto('/');
-  await expect(page.locator('html')).toHaveCSS('--text-scale', '1.5');
+  await expect(page.locator('html')).toHaveCSS('--text-scale', String(textScale));
   await expect(page.getByTestId('autosave-status')).toHaveText('Saved just now');
 }
 
@@ -74,7 +74,7 @@ async function expectPuzzlePanelFits(panel, viewport) {
   expect(layout.panelInViewport, `Chronology panel should fit ${viewport.width}x${viewport.height}`).toBe(true);
   expect(layout.panelHasHorizontalOverflow, 'Chronology content should not overflow horizontally').toBe(false);
   expect(layout.pageHasHorizontalOverflow, 'page should not overflow horizontally').toBe(false);
-  expect(layout.panelScrollsVertically, 'Chronology panel should scroll internally at 150%').toBe(true);
+  expect(layout.panelScrollsVertically, 'Chronology panel should scroll internally').toBe(true);
 }
 
 async function expectToolbarAvailableBesidePanel(panel, page) {
@@ -236,3 +236,63 @@ for (const viewport of [{ width: 320, height: 360 }, { width: 320, height: 400 }
     await expectWithinPanelViewport(panel, result, 'Chronology completion status');
   });
 }
+
+test('200% text keeps Chronology Puzzle controls reachable at 320x360', async ({ page }) => {
+  const viewport = { width: 320, height: 360 };
+  await page.setViewportSize(viewport);
+  await seedChronology(page, 2);
+  await page.getByTestId('open-puzzle').click();
+
+  const panel = page.getByTestId('chronology-puzzle-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole('heading', { name: chronology.title })).toBeVisible();
+  await expectPuzzlePanelFits(panel, viewport);
+  await expectToolbarAvailableBesidePanel(panel, page);
+
+  const close = panel.getByRole('button', { name: 'Close puzzle panel' });
+  await expectFocusedControlReachable(panel, close, 'Close puzzle panel');
+  const panelScrollTopBeforeTraversal = await panel.evaluate((element) => element.scrollTop);
+  for (const event of chronology.events) {
+    const eventButton = panel.getByTestId(`chronology-event-${event.id}`);
+    await page.keyboard.press('Tab');
+    await expect(eventButton).toBeFocused();
+    await expectFocusedControlReachable(panel, eventButton, `${event.label} event choice`);
+    await expect(eventButton).toHaveAccessibleDescription(event.evidence);
+  }
+
+  const undo = panel.getByRole('button', { name: 'Undo last event' });
+  await page.keyboard.press('Tab');
+  await expect(undo).toBeFocused();
+  await expectFocusedControlReachable(panel, undo, 'Undo last event');
+
+  const clear = panel.getByRole('button', { name: 'Clear timeline' });
+  await page.keyboard.press('Tab');
+  await expect(clear).toBeFocused();
+  await expectFocusedControlReachable(panel, clear, 'Clear timeline');
+  const panelScrollTopAfterTraversal = await panel.evaluate((element) => element.scrollTop);
+  expect(panelScrollTopAfterTraversal, 'keyboard traversal should scroll to the lower Chronology controls')
+    .toBeGreaterThan(panelScrollTopBeforeTraversal);
+
+  for (const eventId of chronology.solution) {
+    const eventButton = panel.getByTestId(`chronology-event-${eventId}`);
+    await expectFocusedControlReachable(panel, eventButton, `${eventId} event choice`);
+    await eventButton.click();
+  }
+
+  const submit = panel.getByRole('button', { name: 'Submit chronology' });
+  await expect(submit).toBeEnabled();
+  await clear.focus();
+  await page.keyboard.press('Tab');
+  await expect(submit).toBeFocused();
+  await expectFocusedControlReachable(panel, submit, 'Submit chronology');
+  await submit.click();
+
+  const result = panel.getByTestId('puzzle-result');
+  await expect(result).toHaveAttribute('role', 'status');
+  await expect(result).toContainText(/dates align.*Chronology Wheel/i);
+  await result.scrollIntoViewIfNeeded();
+  await expect(result).toBeVisible();
+  await expect(page.getByTestId('invention-stage')).toContainText('Chronology Wheel');
+  await expect(page.getByTestId('open-puzzle')).toContainText(/solved/i);
+  await expectWithinPanelViewport(panel, result, 'Chronology completion status');
+});
